@@ -62,6 +62,29 @@ backups/
 *.sql.gz
 *.tar.gz
 
+# 📚 DOCUMENTATION: Exclude documentation files (not needed on server)
+*.md
+README*
+CHANGELOG*
+LICENSE*
+CONTRIBUTING*
+
+# 🖥️ PLATFORM-SPECIFIC: Windows scripts and files
+*.bat
+*.cmd
+*.ps1
+run_windows.py
+setup_windows.py
+install_windows.*
+
+# 🖥️ PLATFORM-SPECIFIC: Development and testing files
+test_*.py
+*_test.py
+tests/
+testing/
+dev_*.py
+development/
+
 # Distribution / packaging
 .Python
 build/
@@ -219,3 +242,13 @@ cython_debug/
 bot_data.json
 logs/
 *.db
+
+# 📚 INCLUDE: Documentation and Scripts (these should be committed)
+# Remove any exclusions for:
+# *.md files (documentation)
+# *.bat files (Windows scripts)
+# *.ps1 files (PowerShell scripts)
+# *.sh files (deployment scripts)
+
+# Note: All .md, .bat, .ps1, and .sh files WILL be committed
+# This ensures documentation and deployment scripts are available on the server
