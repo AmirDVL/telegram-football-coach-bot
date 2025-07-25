@@ -1,0 +1,16 @@
+{
+  "super_admin": 293893885,
+  "admins": [
+    293893885
+  ],
+  "admin_permissions": {
+    "293893885": {
+      "can_add_admins": true,
+      "can_remove_admins": true,
+      "can_view_users": true,
+      "can_manage_payments": true,
+      "added_by": "system",
+      "added_date": "2025-07-25T17:03:18.296953"
+    }
+  }
+}
