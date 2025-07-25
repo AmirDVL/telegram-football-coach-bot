@@ -64,6 +64,7 @@ backups/
 
 # 📚 DOCUMENTATION: Exclude documentation files (not needed on server)
 *.md
+!DEPLOYMENT_LINUX.md
 README*
 CHANGELOG*
 LICENSE*
@@ -245,7 +246,7 @@ logs/
 
 # 📚 INCLUDE: Documentation and Scripts (these should be committed)
 # Remove any exclusions for:
-# *.md files (documentation)
+*.md files (documentation)
 # *.bat files (Windows scripts)
 # *.ps1 files (PowerShell scripts)
 # *.sh files (deployment scripts)
