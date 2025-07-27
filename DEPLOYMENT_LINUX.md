@@ -1,63 +1,81 @@
 # 🚀 Football Coach Bot - Linux Server Deployment Guide
 
-This guide will help you deploy the Football Coach Bot on a fresh Debian/Ubuntu server.
+This guide will help you deploy the Football Coach Bot with PostgreSQL database on a fresh Linux server.
 
 ## Prerequisites
 
-- Fresh Debian 11+ or Ubuntu 20.04+ server
+- Fresh Linux server (Debian 11+, Ubuntu 20.04+, CentOS 8+, or RHEL 8+)
 - Root access or sudo privileges
 - Internet connection
 - Telegram Bot Token (from @BotFather)
 - Your Telegram User ID (get from @userinfobot)
 
-## Quick Deployment
+## 🎯 Quick Production Deployment
 
-### 1. Download and Run Deployment Script
+### Option 1: Automated Production Deployment (Recommended)
 
 ```bash
-# Download the repository
+# Download the latest deployment script
+wget https://raw.githubusercontent.com/your-username/football-coach-bot/main/deploy_production.sh
+
+# Make it executable
+chmod +x deploy_production.sh
+
+# Run the deployment script
+sudo bash deploy_production.sh
+```
+
+The production deployment script will:
+- ✅ Detect your Linux distribution automatically
+- ✅ Update the system and install dependencies
+- ✅ Install and configure PostgreSQL database
+- ✅ Create dedicated bot user for security
+- ✅ Set up Python virtual environment
+- ✅ Configure PostgreSQL database with proper permissions
+- ✅ Create and configure systemd service
+- ✅ Set up automated backups (daily at 2 AM)
+- ✅ Configure log rotation
+- ✅ Set up firewall rules
+- ✅ Create management scripts
+- ✅ Initialize database with admin user
+- ✅ Start the bot service
+
+### Option 2: Standard Debian/Ubuntu Deployment
+
+```bash
+# Clone the repository
 git clone <your-repo-url> /tmp/football-bot
 cd /tmp/football-bot
 
 # Make scripts executable
-chmod +x deploy.sh manage.sh update.sh
+chmod +x setup_debian.sh manage.sh update.sh
 
-# Run the deployment script
-sudo bash deploy.sh
+# Run the setup script
+sudo bash setup_debian.sh
 ```
 
-The deployment script will:
-- ✅ Update the system
-- ✅ Install Python 3, PostgreSQL, and dependencies
-- ✅ Create dedicated bot user and directory
-- ✅ Set up virtual environment
-- ✅ Configure database
-- ✅ Create systemd service
-- ✅ Set up automated backups
-- ✅ Configure log rotation
-- ✅ Start the bot service
+## 🗄️ Database Configuration
 
-### 2. During Installation
+The bot now uses **PostgreSQL** as the primary database with the following benefits:
 
-The script will ask for:
-- **Bot Token**: Your Telegram Bot Token from @BotFather
-- **Admin ID**: Your Telegram User ID
-- **Database Password**: A secure password for PostgreSQL
+### PostgreSQL Features:
+- ✅ **Persistent data storage** - No data loss on restarts
+- ✅ **ACID compliance** - Data integrity guaranteed
+- ✅ **Concurrent access** - Multiple processes can access safely
+- ✅ **Backup and recovery** - Automated daily backups
+- ✅ **Scalability** - Handles thousands of users
+- ✅ **Persian text support** - Full UTF-8 support
 
-## Manual Deployment (Alternative)
+### Database Setup:
+```sql
+-- Database: football_coach_bot
+-- User: footballbot
+-- Tables: users, payments, admins, user_responses, statistics
+```
+
+## 🔧 Manual Installation (Advanced Users)
 
 If you prefer manual installation:
-
-### 1. System Setup
-```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
-
-# Install dependencies
-sudo apt install -y python3 python3-pip python3-venv postgresql postgresql-contrib git
-```
-
-### 2. Database Setup
 ```bash
 # Create database and user
 sudo -u postgres createdb football_coach_bot

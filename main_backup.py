@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -88,7 +87,7 @@ class FootballCoachBot:
             else:
                 # Questionnaire not completed
                 current_step = questionnaire_status.get('current_step', 1)
-                total_steps = questionnaire_status.get('total_steps', 17)
+                total_steps = questionnaire_status.get('total_steps', 21)
                 keyboard = [
                     [InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')],
                     [InlineKeyboardButton("🔄 شروع مجدد پرسشنامه", callback_data='restart_questionnaire')],
@@ -213,18 +212,18 @@ class FootballCoachBot:
         question = await self.questionnaire_manager.get_current_question(user_id)
         
         if question:
-            intro_message = f"""✨ عالی! قبل از پرداخت باید اطلاعاتت رو تکمیل کنیم
-
-📋 این فرآیند فقط {17} سوال ساده داره تا بتونم بهترین برنامه تمرینی رو برات طراحی کنم
-
-⏱️ زمان تقریبی: 3-5 دقیقه
-
-آماده‌ای؟ بیا شروع کنیم! 🚀
-
-───────────────────
-{question['progress_text']}
-
-{question['text']}"""
+            intro_message = ("✨ عالی! قبل از پرداخت باید اطلاعاتت رو تکمیل کنیم\n"
+                             "\n"
+                             "📋 این فرآیند فقط {21} سوال ساده داره تا بتونم بهترین برنامه تمرینی رو برات طراحی کنم\n"
+                             "\n"
+                             "⏱️ زمان تقریبی: 3-5 دقیقه\n"
+                             "\n"
+                             "آماده‌ای؟ بیا شروع کنیم! 🚀\n"
+                             "\n"
+                             "───────────────────\n"
+                             "{question['progress_text']}\n"
+                             "\n"
+                             "{question['text']}")
             
             # Add choices as buttons if it's a choice question
             keyboard = []
@@ -253,15 +252,15 @@ class FootballCoachBot:
             'status': 'pending'
         })
         
-        payment_message = f"""برای پرداخت به شماره کارت زیر واریز کنید:
-
-💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}
-👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
-💰 مبلغ: {Config.PRICES[course_type]:,} تومان
-
-بعد از واریز، فیش یا اسکرین شات رو همینجا ارسال کنید تا بررسی شه ✅
-
-⚠️ توجه: فقط فیش واریز رو ارسال کنید"""
+        payment_message = ("برای پرداخت به شماره کارت زیر واریز کنید:\n"
+                             "\n"
+                             "💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}\n"
+                             "👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}\n"
+                             "💰 مبلغ: {Config.PRICES[course_type]:,} تومان\n"
+                             "\n"
+                             "بعد از واریز، فیش یا اسکرین شات رو همینجا ارسال کنید تا بررسی شه ✅\n"
+                             "\n"
+                             "⚠️ توجه: فقط فیش واریز رو ارسال کنید")
         
         keyboard = [
             [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
@@ -349,14 +348,16 @@ class FootballCoachBot:
             
             # Notify admin for approval
             if Config.ADMIN_ID:
-                admin_message = (f"🔔 درخواست تایید پرداخت جدید:\n\n"
-                               f"👤 کاربر: {update.effective_user.first_name} (@{update.effective_user.username or 'بدون نام کاربری'})\n"
-                               f"🆔 User ID: {user_id}\n"
-                               f"📚 دوره: {course_title}\n"
-                               f"💰 مبلغ: {price:,} تومان\n"
-                               f"📸 ابعاد تصویر: {photo.width}×{photo.height}\n"
-                               f"📦 حجم فایل: {photo.file_size // 1024 if photo.file_size else 'نامشخص'} KB\n\n"
-                               f"⚠️ فیش واریز ارسال شده - لطفا بررسی کنید")
+                admin_message = ("🔔 درخواست تایید پرداخت جدید:\n"
+                             "                \n"
+                             "👤 کاربر: {update.effective_user.first_name} (@{update.effective_user.username or 'بدون نام کاربری'})\n"
+                             "🆔 User ID: {user_id}\n"
+                             "📚 دوره: {course_title}\n"
+                             "💰 مبلغ: {price:,} تومان\n"
+                             "📸 ابعاد تصویر: {photo.width}×{photo.height}\n"
+                             "📦 حجم فایل: {photo.file_size // 1024 if photo.file_size else 'نامشخص'} KB\n"
+                             "\n"
+                             "⚠️ فیش واریز ارسال شده - لطفا بررسی کنید")
                 
                 # Create approval buttons for admin
                 keyboard = [
@@ -387,120 +388,222 @@ class FootballCoachBot:
             )
 
     async def handle_questionnaire_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle photo submission for questionnaire question 18"""
+        """Handle photo upload for questionnaire with comprehensive validation"""
         user_id = update.effective_user.id
         
+        # Validate that this is actually a photo message
+        if not update.message or not update.message.photo:
+            await update.message.reply_text(
+                "❌ لطفاً یک تصویر ارسال کنید!\n\n"
+                "در این مرحله از پرسشنامه، باید عکس ارسال کنید."
+            )
+            return
+        
         try:
-            # Get the photo
-            photo = update.message.photo[-1]  # Get highest resolution
+            # Get the largest photo size
+            photo = update.message.photo[-1]
             
-            # Validate photo using ImageProcessor
-            if not self.image_processor.validate_image(photo):
+            # Validate photo specifications
+            if photo.file_size and photo.file_size > 20 * 1024 * 1024:  # 20MB
                 await update.message.reply_text(
-                    "❌ تصویر ارسالی معتبر نیست!\n\n"
-                    "شرایط تصویر:\n"
-                    "📏 حداقل ابعاد: ۲۰۰×۲۰۰ پیکسل\n"
-                    "📦 حداکثر حجم: ۲۰ مگابایت\n"
-                    "🖼️ فرمت: JPG, PNG, WebP\n\n"
-                    "لطفاً تصویر مناسب‌تری ارسال کنید."
+                    "❌ تصویر خیلی بزرگ است!\n\n"
+                    "حداکثر سایز مجاز: ۲۰ مگابایت\n"
+                    "لطفاً تصویر کوچک‌تری ارسال کنید."
                 )
                 return
             
-            # Process and compress the image
-            file = await context.bot.get_file(photo.file_id)
-            file_path = f"temp_{user_id}_{photo.file_id}.jpg"
-            
-            # Download the file
-            await file.download_to_drive(file_path)
-            
-            try:
-                # Compress the image
-                compressed_path, compression_info = await self.image_processor.compress_image(file_path)
-                
-                # Save to database
-                await self.database_manager.save_user_image(
-                    user_id=user_id,
-                    question_number=18,
-                    file_id=photo.file_id,
-                    original_size=compression_info['original_size'],
-                    compressed_size=compression_info['compressed_size'],
-                    compression_ratio=compression_info['compression_ratio']
+            if photo.width < 300 or photo.height < 300:
+                await update.message.reply_text(
+                    "❌ تصویر خیلی کوچک است!\n\n"
+                    "برای آنالیز بدن، حداقل ابعاد ۳۰۰×۳۰۰ پیکسل لازم است.\n"
+                    "لطفاً تصویر با کیفیت بهتر ارسال کنید."
                 )
-                
-                # Clean up temp files
-                os.remove(file_path)
-                if os.path.exists(compressed_path):
-                    os.remove(compressed_path)
+                return
+            
+            # Download and validate image content
+            photo_file = await context.bot.get_file(photo.file_id)
+            photo_bytes = await photo_file.download_as_bytearray()
+            
+            # Validate image with our processor
+            is_valid, error_msg = self.image_processor.validate_image(photo_bytes)
+            if not is_valid:
+                await update.message.reply_text(
+                    f"❌ مشکل در تصویر ارسالی:\n\n{error_msg}\n\n"
+                    "لطفاً تصویر صحیحی ارسال کنید."
+                )
+                return
+            
+            # Compress image
+            compressed_bytes, compression_info = self.image_processor.compress_image(photo_bytes)
+            
+            # Process the photo answer in questionnaire
+            result = await self.questionnaire_manager.process_photo_answer(user_id, photo.file_id)
+            
+            if result["status"] == "error":
+                await update.message.reply_text(
+                    f"❌ {result['message']}\n\n"
+                    "اگر مشکل ادامه دارد، با پشتیبانی تماس بگیرید."
+                )
+                return
+            elif result["status"] == "need_more_photos":
+                photos_received = result.get("photos_received", 0)
+                photos_needed = result.get("photos_needed", 3)
                 
                 await update.message.reply_text(
-                    "✅ تصویر شما با موفقیت دریافت و پردازش شد!\n\n"
-                    f"📊 اطلاعات پردازش:\n"
-                    f"📏 ابعاد: {photo.width}×{photo.height}\n"
-                    f"📦 حجم اصلی: {compression_info['original_size'] // 1024} KB\n"
-                    f"📦 حجم فشرده: {compression_info['compressed_size'] // 1024} KB\n"
-                    f"🗜️ نرخ فشرده‌سازی: {compression_info['compression_ratio']:.1f}%\n\n"
-                    "⏭️ بریم سوال بعدی..."
+                    f"✅ تصویر {photos_received} از {photos_needed} دریافت شد!\n\n"
+                    f"📸 لطفاً {photos_needed - photos_received} تصویر دیگر ارسال کنید:\n"
+                    f"• تصویر از جلو (ایستاده، رو به دوربین)\n"
+                    f"• تصویر از پهلو (ایستاده، نیمرخ)\n"
+                    f"• تصویر از پشت (ایستاده، پشت به دوربین)\n\n"
+                    f"💡 برای آنالیز بهتر، در محیط با نور کافی عکس بگیرید."
                 )
-                
-                # Progress to next question
-                await self.questionnaire_manager.save_answer(user_id, "photo_received")
-                await self.questionnaire_manager.send_next_question(user_id, context)
-                
-            except Exception as process_error:
-                # Clean up temp file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                raise process_error
+                return
+            elif result["status"] == "continue":
+                # Show next question
+                question = result["question"]
+                if question:
+                    message = ("✅ تصاویر شما دریافت شد و ذخیره شد!\n"
+                             "                    \n"
+                             "{result['progress_text']}\n"
+                             "\n"
+                             "{question['text']}")
+                    
+                    keyboard = []
+                    if question.get('type') == 'choice':
+                        choices = question.get('choices', [])
+                        for choice in choices:
+                            keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+                    else:
+                        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+                    
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await update.message.reply_text(message, reply_markup=reply_markup)
+                else:
+                    await update.message.reply_text(
+                        "❌ خطا در بارگذاری سوال بعدی.\n"
+                        "لطفاً دوباره تلاش کنید."
+                    )
+            elif result["status"] == "completed":
+                await update.message.reply_text(
+                    "🎉 عالی! تصاویر شما دریافت شد!\n\n"
+                    "پرسشنامه تکمیل شد. حالا وقت پرداخت است! 💳"
+                )
+                await self.complete_questionnaire_from_text(update, context)
                 
         except Exception as e:
             logger.error(f"Error processing questionnaire photo: {e}")
             await update.message.reply_text(
                 "❌ خطا در پردازش تصویر!\n\n"
-                "لطفاً دوباره تلاش کنید.\n"
-                "اگر مشکل ادامه داشت، با پشتیبانی تماس بگیرید.\n\n"
+                "ممکن است مشکل موقتی باشد. لطفاً:\n"
+                "1️⃣ چند لحظه صبر کنید\n"
+                "2️⃣ دوباره تصویر را ارسال کنید\n"
+                "3️⃣ اگر مشکل ادامه دارد، با پشتیبانی تماس بگیرید\n\n"
                 f"کد خطا: {str(e)[:50]}"
             )
 
+{question['text']}"""
+                
+                keyboard = []
+                if question.get('type') == 'choice':
+                    choices = question.get('choices', [])
+                    for choice in choices:
+                        keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+                else:
+                    keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(message, reply_markup=reply_markup)
+            else:
+                # Something went wrong, proceed to completion
+                await self.complete_questionnaire_from_text(update, context)
+                
+            # Save compressed image to database if using database mode
+            if Config.USE_DATABASE:
+                try:
+                    # Get user's payment info to associate with images
+                    user_data = await self.data_manager.get_user_data(user_id)
+                    payment_id = user_data.get('current_payment_id', 1)  # Default to 1 if not found
+                    
+                    # Get current question step
+                    current_question = await self.questionnaire_manager.get_current_question(user_id)
+                    question_step = current_question.get("step", 18) if current_question else 18
+                    
+                    # Calculate image order based on existing photos
+                    existing_photos = await self.data_manager.get_user_images_by_step(user_id, question_step, payment_id)
+                    image_order = len(existing_photos) + 1
+                    
+                    # Save to database
+                    await self.data_manager.save_user_image(
+                        user_id=user_id,
+                        payment_id=payment_id,
+                        question_step=question_step,
+                        file_id=photo.file_id,
+                        image_order=image_order,
+                        file_size=compression_info.get('original_size'),
+                        compressed_size=compression_info.get('compressed_size')
+                    )
+                    
+                    logger.info(f"Saved questionnaire photo for user {user_id}, step {question_step}, order {image_order}")
+                except Exception as e:
+                    logger.error(f"Error saving photo to database: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error handling questionnaire photo: {e}")
+            await update.message.reply_text("❌ خطا در پردازش تصویر. لطفاً دوباره تلاش کنید.")
+
     async def handle_unsupported_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle non-photo file uploads with helpful error messages"""
+        """Handle unsupported file types with helpful error messages"""
         user_id = update.effective_user.id
         
-        # Check if user is in questionnaire mode
+        # Check if user is in questionnaire mode and current question expects a photo
         current_question = await self.questionnaire_manager.get_current_question(user_id)
-        
         if current_question and current_question.get("type") == "photo":
+            # User is in photo questionnaire step but sent wrong file type
             await update.message.reply_text(
-                "❌ فقط عکس قابل ارسال است!\n\n"
-                "💡 راهنمای ارسال عکس:\n"
-                "1️⃣ در گالری گوشی عکس مورد نظر را انتخاب کنید\n"
-                "2️⃣ روی گزینه 'ارسال به عنوان عکس' کلیک کنید\n"
-                "3️⃣ از ارسال به عنوان 'فایل' خودداری کنید\n\n"
-                "📸 فرمت‌های مجاز: JPG, PNG, WebP\n"
-                "📏 حداقل اندازه: ۲۰۰×۲۰۰ پیکسل"
+                "❌ در این مرحله فقط تصویر (عکس) قابل قبول است!\n\n"
+                "📸 لطفاً به جای فایل، از دوربین گوشی عکس بگیرید و ارسال کنید.\n\n"
+                "🚫 فایل‌های قابل قبول نیستند:\n"
+                "• فایل PDF\n"
+                "• فایل Word\n"
+                "• ویدیو\n"
+                "• فایل صوتی\n\n"
+                "✅ فقط عکس (Photo) ارسال کنید."
             )
-        elif user_id in self.payment_pending:
+            return
+        
+        # Check if user is trying to send payment receipt
+        if user_id in self.payment_pending:
             await update.message.reply_text(
-                "❌ فقط عکس فیش واریز قابل ارسال است!\n\n"
-                "💡 نحوه ارسال صحیح:\n"
-                "1️⃣ عکس فیش واریز را از گالری انتخاب کنید\n"
-                "2️⃣ حتماً به عنوان 'عکس' ارسال کنید (نه فایل)\n"
-                "3️⃣ از وضوح و خوانایی فیش اطمینان حاصل کنید\n\n"
-                "📋 اطلاعات مورد نیاز در فیش:\n"
-                "• شماره کارت مقصد\n"
-                "• مبلغ واریزی\n"
-                "• تاریخ و ساعت تراکنش\n"
-                "• شماره پیگیری"
+                "❌ برای فیش واریز، فقط تصویر (عکس) قابل قبول است!\n\n"
+                "📸 لطفاً عکس فیش واریز را ارسال کنید.\n"
+                "🚫 فایل ارسال نکنید.\n\n"
+                "💡 راهنمایی:\n"
+                "1️⃣ از دوربین گوشی عکس بگیرید\n"
+                "2️⃣ یا از گالری عکس انتخاب کنید\n"
+                "3️⃣ روی دکمه 📎 کنار متن بزنید و Photo را انتخاب کنید"
             )
-        else:
-            await update.message.reply_text(
-                "❌ نوع فایل ارسالی پشتیبانی نمی‌شود!\n\n"
-                "✅ فایل‌های قابل قبول:\n"
-                "📸 تصاویر: JPG, PNG, WebP\n\n"
-                "💡 برای ارسال عکس:\n"
-                "• از گالری گوشی عکس را انتخاب کنید\n"
-                "• حتماً به عنوان 'عکس' ارسال کنید\n\n"
-                "❓ اگر سوالی دارید /help را بزنید"
-            )
+            return
+        
+        # General error for unsupported files
+        file_type = "نامشخص"
+        if update.message.document:
+            file_type = "فایل"
+        elif update.message.video:
+            file_type = "ویدیو"
+        elif update.message.audio or update.message.voice:
+            file_type = "فایل صوتی"
+        elif update.message.sticker:
+            file_type = "استیکر"
+        
+        await update.message.reply_text(
+            f"❌ {file_type} قابل پردازش نیست!\n\n"
+            "🤖 این ربات فقط موارد زیر را پردازش می‌کند:\n"
+            "• 💬 متن (برای پاسخ به سوالات)\n"
+            "• 📸 تصویر (برای فیش واریز و عکس‌های پرسشنامه)\n\n"
+            "💡 اگر نیاز به ارسال فایل دارید، با پشتیبانی تماس بگیرید."
+        )
 
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle questionnaire responses"""
@@ -517,13 +620,10 @@ class FootballCoachBot:
                 'registration_complete': True
             })
             
-            await update.message.reply_text("""🎉 عالی! اطلاعات شما دریافت شد.
-
-برنامه تمرینی شما بر اساس اطلاعات ارائه شده طراحی میشه و ظرف ۲۴ ساعت براتون ارسال میشه.
-
-از اینکه به خانواده ما پیوستید خوشحالیم! 💪⚽️
-
-برای هر سوال یا مشکل، همیشه در دسترس هستم 🤝""")
+            await update.message.reply_text("✅ عالی! اطلاعات شما دریافت شد.\n\n"
+                                           "برنامه تمرینی شما بر اساس اطلاعات ارائه شده طراحی میشه و ظرف ۲۴ ساعت براتون ارسال میشه.\n\n"
+                                           "از اینکه به خانواده ما پیوستید خوشحالیم! 💪⚽️\n\n"
+                                           "برای هر سوال یا مشکل، همیشه در دسترس هستم 🤝")
             
             # Update statistics
             await self.data_manager.update_statistics('total_users')
@@ -531,12 +631,12 @@ class FootballCoachBot:
             # Notify admin with full details
             if Config.ADMIN_ID:
                 try:
-                    admin_message = f"""📝 فرم جدید دریافت شد:
-👤 کاربر: {update.effective_user.first_name} (@{update.effective_user.username or 'بدون نام کاربری'})
-🆔 User ID: {user_id}
-📚 دوره: {user_data.get('course', 'نامشخص')}
-📄 پاسخ‌ها:
-{update.message.text[:1000]}{'...' if len(update.message.text) > 1000 else ''}"""
+                    admin_message = (f"📝 فرم جدید دریافت شد:\n"
+                                   f"👤 کاربر: {update.effective_user.first_name} (@{update.effective_user.username or 'بدون نام کاربری'})\n"
+                                   f"🆔 User ID: {user_id}\n"
+                                   f"📚 دوره: {user_data.get('course', 'نامشخص')}\n"
+                                   f"📄 پاسخ‌ها:\n"
+                                   f"{update.message.text[:1000]}{'...' if len(update.message.text) > 1000 else ''}")
                     
                     await context.bot.send_message(chat_id=Config.ADMIN_ID, text=admin_message)
                 except Exception as e:
@@ -620,12 +720,12 @@ class FootballCoachBot:
             course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص') if course_type else 'نامشخص'
             price = Config.PRICES.get(course_type, 0) if course_type else 0
             
-            updated_message = f"""✅ پرداخت تایید شد:
-👤 کاربر: {user_data.get('name', 'ناشناس')}
-🆔 User ID: {user_id}
-📚 دوره: {course_title}
-💰 مبلغ: {price:,} تومان
-⏰ تایید شده توسط: {update.effective_user.first_name}"""
+            updated_message = (f"✅ پرداخت تایید شد:\n"
+                              f"👤 کاربر: {user_data.get('name', 'ناشناس')}\n"
+                              f"🆔 User ID: {user_id}\n"
+                              f"📚 دوره: {course_title}\n"
+                              f"💰 مبلغ: {price:,} تومان\n"
+                              f"⏰ تایید شده توسط: {update.effective_user.first_name}")
             
             await query.edit_message_text(updated_message)
             
@@ -649,10 +749,10 @@ class FootballCoachBot:
                 logger.error(f"Failed to notify user {user_id}: {e}")
             
             # Update admin message
-            updated_message = f"""❌ پرداخت رد شد:
-👤 کاربر: {user_data.get('name', 'ناشناس')}
-🆔 User ID: {user_id}
-⏰ رد شده توسط: {update.effective_user.first_name}"""
+            updated_message = (f"❌ پرداخت رد شد:\n"
+                              f"👤 کاربر: {user_data.get('name', 'ناشناس')}\n"
+                              f"🆔 User ID: {user_id}\n"
+                              f"⏰ رد شده توسط: {update.effective_user.first_name}")
             
             await query.edit_message_text(updated_message)
 
@@ -680,9 +780,9 @@ class FootballCoachBot:
         question = result["question"]
         if question:
             # Show next question
-            message = f"""{result['progress_text']}
-
-{question['text']}"""
+            message = ("{result['progress_text']}\n"
+                             "\n"
+                             "{question['text']}")
             
             keyboard = []
             if question.get('type') == 'choice':
@@ -702,32 +802,81 @@ class FootballCoachBot:
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle text responses from questionnaire"""
         user_id = update.effective_user.id
-        text_answer = update.message.text
+        
+        # Validate that this is a text message
+        if not update.message or not update.message.text:
+            await update.message.reply_text(
+                "❌ لطفاً متن ارسال کنید!\n\n"
+                "در این مرحله از پرسشنامه، باید پاسخ متنی ارسال کنید."
+            )
+            return
+        
+        text_answer = update.message.text.strip()
+        
+        # Check if message is too long (prevent spam)
+        if len(text_answer) > 2000:
+            await update.message.reply_text(
+                "❌ پاسخ خیلی طولانی است!\n\n"
+                "حداکثر ۲۰۰۰ کاراکتر مجاز است.\n"
+                "لطفاً پاسخ مختصرتری ارسال کنید."
+            )
+            return
+        
+        # Check if message is empty
+        if not text_answer:
+            await update.message.reply_text(
+                "❌ پاسخ خالی ارسال کرده‌اید!\n\n"
+                "لطفاً یک پاسخ معتبر ارسال کنید."
+            )
+            return
         
         # Check if user is in questionnaire mode
         current_question = await self.questionnaire_manager.get_current_question(user_id)
         
         if not current_question:
-            # User is not in questionnaire mode, ignore
+            # User is not in questionnaire mode, give helpful message
+            await update.message.reply_text(
+                "🤔 در حال حاضر هیچ پرسشنامه‌ای در جریان نیست.\n\n"
+                "برای شروع دوباره /start را بزنید."
+            )
             return
         
         # Get the current step from the question
         current_step = current_question.get("step")
+        question_type = current_question.get("type")
+        
+        # Check if current question expects a photo but user sent text
+        if question_type == "photo":
+            await update.message.reply_text(
+                "❌ در این مرحله باید عکس ارسال کنید!\n\n"
+                "📸 لطفاً از دوربین گوشی عکس بگیرید و ارسال کنید.\n"
+                "🚫 متن قابل قبول نیست."
+            )
+            return
         
         # Validate and submit the answer
         is_valid, error_msg = self.questionnaire_manager.validate_answer(current_step, text_answer)
         
         if not is_valid:
-            # Send error message
-            await update.message.reply_text(f"❌ {error_msg}")
+            # Send improved error message with context
+            question_title = self.questionnaire_manager.get_question_title(current_step)
+            await update.message.reply_text(
+                f"❌ پاسخ نامعتبر برای \"{question_title}\":\n\n"
+                f"🔍 مشکل: {error_msg}\n\n"
+                "💡 لطفاً پاسخ صحیحی ارسال کنید."
+            )
             return
         
         # Submit the answer
         result = await self.questionnaire_manager.process_answer(user_id, text_answer)
         
         if result["status"] == "error":
-            # Send error message
-            await update.message.reply_text(f"❌ {result['message']}")
+            # Send improved error message
+            await update.message.reply_text(
+                f"❌ خطا در ثبت پاسخ:\n\n"
+                f"{result['message']}\n\n"
+                "🔄 لطفاً دوباره تلاش کنید."
+            )
             return
         elif result["status"] == "completed":
             # Questionnaire completed
@@ -738,9 +887,9 @@ class FootballCoachBot:
         question = result["question"]
         if question:
             # Show next question
-            message = f"""{result['progress_text']}
-
-{question['text']}"""
+            message = ("{result['progress_text']}\n"
+                             "\n"
+                             "{question['text']}")
             
             keyboard = []
             if question.get('type') == 'choice':
@@ -765,11 +914,9 @@ class FootballCoachBot:
         # Get course type from pending payment
         course_type = self.payment_pending.get(user_id)
         
-        completion_message = """🎉 تبریک! پرسشنامه با موفقیت تکمیل شد
-
-اطلاعات شما ذخیره شد و حالا می‌تونیم بهترین برنامه تمرینی رو برای شما طراحی کنیم!
-
-حالا وقت پرداخته! 💳"""
+        completion_message = ("🎉 تبریک! پرسشنامه با موفقیت تکمیل شد\n\n"
+                             "اطلاعات شما ذخیره شد و حالا می‌تونیم بهترین برنامه تمرینی رو برای شما طراحی کنیم!\n\n"
+                             "حالا وقت پرداخته! 💳")
         
         # Edit the message to show completion
         await query.edit_message_text(completion_message)
@@ -787,11 +934,9 @@ class FootballCoachBot:
         # Get course type from pending payment
         course_type = self.payment_pending.get(user_id)
         
-        completion_message = """🎉 تبریک! پرسشنامه با موفقیت تکمیل شد
-
-اطلاعات شما ذخیره شد و حالا می‌تونیم بهترین برنامه تمرینی رو برای شما طراحی کنیم!
-
-حالا وقت پرداخته! 💳"""
+        completion_message = ("🎉 تبریک! پرسشنامه با موفقیت تکمیل شد\n\n"
+                             "اطلاعات شما ذخیره شد و حالا می‌تونیم بهترین برنامه تمرینی رو برای شما طراحی کنیم!\n\n"
+                             "حالا وقت پرداخته! 💳")
         
         # Send completion message
         await update.message.reply_text(completion_message)
@@ -844,7 +989,6 @@ class FootballCoachBot:
 
     async def show_user_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show comprehensive user status"""
-        query = update.callback_query
         user_id = update.effective_user.id
         user_name = user_data.get('name', 'کاربر')
         
@@ -865,11 +1009,10 @@ class FootballCoachBot:
                 questionnaire_status = f"📝 مرحله {current_step} از {total_steps}"
         
         # Format status message
-        status_text = f"""📊 **وضعیت شما**
-
-👤 **نام:** {user_name}
-📚 **دوره:** {course_name}
-💳 **وضعیت پرداخت:** {self.get_payment_status_text(payment_status)}"""
+        status_text = (f"📊 **وضعیت شما**\n\n"
+                       f"👤 **نام:** {user_name}\n"
+                       f"📚 **دوره:** {course_name}\n"
+                       f"💳 **وضعیت پرداخت:** {self.get_payment_status_text(payment_status)}")
         
         if questionnaire_status:
             status_text += f"\n📝 **پرسشنامه:** {questionnaire_status}"
@@ -902,31 +1045,24 @@ class FootballCoachBot:
         course_name = user_data.get('course_selected', 'نامشخص')
         
         if payment_status == 'pending_approval':
-            message = f"""⏳ **وضعیت پرداخت**
-
-دوره: {course_name}
-وضعیت: در انتظار تایید ادمین
-
-فیش واریزی شما دریافت شده و در حال بررسی است.
-معمولاً این فرآیند تا 24 ساعت طول می‌کشد.
-
-در صورت تایید، بلافاصله اطلاع‌رسانی خواهید شد."""
+            message = (f"⏳ **وضعیت پرداخت**\n\n"
+                       f"دوره: {course_name}\n"
+                       f"وضعیت: در انتظار تایید ادمین\n\n"
+                       f"فیش واریزی شما دریافت شده و در حال بررسی است.\n"
+                       f"معمولاً این فرآیند تا 24 ساعت طول می‌کشد.\n\n"
+                       f"در صورت تایید، بلافاصله اطلاع‌رسانی خواهید شد.")
         elif payment_status == 'approved':
-            message = f"""✅ **وضعیت پرداخت**
-
-دوره: {course_name}
-وضعیت: تایید شده
-
-پرداخت شما با موفقیت تایید شده است!
-اکنون می‌توانید برنامه تمرینی خود را دریافت کنید."""
+            message = (f"✅ **وضعیت پرداخت**\n\n"
+                       f"دوره: {course_name}\n"
+                       f"وضعیت: تایید شده\n\n"
+                       f"پرداخت شما با موفقیت تایید شده است!\n"
+                       f"اکنون می‌توانید برنامه تمرینی خود را دریافت کنید.")
         elif payment_status == 'rejected':
-            message = f"""❌ **وضعیت پرداخت**
-
-دوره: {course_name}
-وضعیت: رد شده
-
-متاسفانه پرداخت شما تایید نشده است.
-لطفاً با پشتیبانی تماس بگیرید یا مجدداً پرداخت کنید."""
+            message = (f"❌ **وضعیت پرداخت**\n\n"
+                       f"دوره: {course_name}\n"
+                       f"وضعیت: رد شده\n\n"
+                       f"متاسفانه پرداخت شما تایید نشده است.\n"
+                       f"لطفاً با پشتیبانی تماس بگیرید یا مجدداً پرداخت کنید.")
         else:
             message = "شما هنوز پرداختی انجام نداده‌اید."
         
@@ -970,16 +1106,12 @@ class FootballCoachBot:
         course_name = user_data.get('course', 'نامشخص')
         
         # This would typically fetch from a database or generate based on questionnaire answers
-        message = f"""📋 **برنامه تمرینی شما**
-
-دوره: {course_name}
-
-برنامه تمرینی شخصی‌سازی شده شما بر اساس پاسخ‌های پرسشنامه آماده شده است.
-
-برای دریافت برنامه کامل لطفاً با مربی تماس بگیرید:
-@username_coach
-
-یا از دکمه زیر استفاده کنید:"""
+        message = (f"📋 **برنامه تمرینی شما**\n\n"
+                   f"دوره: {course_name}\n\n"
+                   f"برنامه تمرینی شخصی‌سازی شده شما بر اساس پاسخ‌های پرسشنامه آماده شده است.\n\n"
+                   f"برای دریافت برنامه کامل لطفاً با مربی تماس بگیرید:\n"
+                   f"@username_coach\n\n"
+                   f"یا از دکمه زیر استفاده کنید:")
         
         keyboard = [
             [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
@@ -992,17 +1124,17 @@ class FootballCoachBot:
 
     async def show_support_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show support contact information"""
-        message = """📞 **اطلاعات تماس پشتیبانی**
-
-برای دریافت پشتیبانی می‌توانید از روش‌های زیر استفاده کنید:
-
-🔹 تلگرام: @support_username
-🔹 شماره تماس: ۰۹۱۲۳۴۵۶۷۸۹
-🔹 ایمیل: support@example.com
-
-ساعات پاسخگویی:
-شنبه تا پنج‌شنبه: ۹ صبح تا ۶ عصر
-جمعه: ۱۰ صبح تا ۲ ظهر"""
+        message = ("📞 **اطلاعات تماس پشتیبانی**\n"
+                             "\n"
+                             "برای دریافت پشتیبانی می‌توانید از روش‌های زیر استفاده کنید:\n"
+                             "\n"
+                             "🔹 تلگرام: @support_username\n"
+                             "🔹 شماره تماس: ۰۹۱۲۳۴۵۶۷۸۹\n"
+                             "🔹 ایمیل: support@example.com\n"
+                             "\n"
+                             "ساعات پاسخگویی:\n"
+                             "شنبه تا پنج‌شنبه: ۹ صبح تا ۶ عصر\n"
+                             "جمعه: ۱۰ صبح تا ۲ ظهر")
         
         keyboard = [
             [InlineKeyboardButton("🔙 بازگشت", callback_data='my_status')]
@@ -1013,16 +1145,16 @@ class FootballCoachBot:
 
     async def show_coach_contact(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show coach contact information"""
-        message = """👨‍💼 **تماس با مربی**
-
-برای دریافت برنامه تمرینی و مشاوره تخصصی:
-
-🔹 تلگرام: @coach_username
-🔹 شماره تماس: ۰۹۱۲۳۴۵۶۷۸۹
-
-⏰ مربی معمولاً ظرف ۲۴ ساعت پاسخ می‌دهد.
-
-نکته: لطفاً نام و نام خانوادگی خود را در پیام اول ذکر کنید."""
+        message = ("👨‍💼 **تماس با مربی**\n"
+                             "\n"
+                             "برای دریافت برنامه تمرینی و مشاوره تخصصی:\n"
+                             "\n"
+                             "🔹 تلگرام: @coach_username\n"
+                             "🔹 شماره تماس: ۰۹۱۲۳۴۵۶۷۸۹\n"
+                             "\n"
+                             "⏰ مربی معمولاً ظرف ۲۴ ساعت پاسخ می‌دهد.\n"
+                             "\n"
+                             "نکته: لطفاً نام و نام خانوادگی خود را در پیام اول ذکر کنید.")
         
         keyboard = [
             [InlineKeyboardButton("🔙 بازگشت", callback_data='view_program')]
@@ -1044,17 +1176,15 @@ class FootballCoachBot:
         await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
 
     def get_payment_status_text(self, status: str) -> str:
-        """Convert payment status to Persian text"""
-        status_map = {
-            'pending_approval': '⏳ در انتظار تایید',
-            'approved': '✅ تایید شده', 
-            'rejected': '❌ رد شده',
-            'none': '❌ پرداخت نشده'
-        }
-        return status_map.get(status, '❓ نامشخص')
-
-    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle errors"""
+        """Convert payment status to Persian text("        status_map = {\n"
+                             "            'pending_approval': '⏳ در انتظار تایید',\n"
+                             "            'approved': '✅ تایید شده', \n"
+                             "            'rejected': '❌ رد شده',\n"
+                             "            'none': '❌ پرداخت نشده'\n"
+                             "        }\n"
+                             "        return status_map.get(status, '❓ نامشخص')\n"
+                             "\n"
+                             "    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:")Handle errors"""
         logger.error(f"Exception while handling an update: {context.error}")
         
         if update and hasattr(update, 'effective_message'):
@@ -1099,8 +1229,17 @@ def main():
     # Handle photo messages (payment receipts and questionnaire photos)
     application.add_handler(MessageHandler(filters.PHOTO, bot.handle_payment_receipt))
     
-    # Handle unsupported file types with helpful messages
-    application.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.VOICE | filters.ANIMATION, bot.handle_unsupported_file))
+    # Handle document/file uploads with helpful error messages
+    application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_unsupported_file))
+    
+    # Handle video uploads with helpful error messages
+    application.add_handler(MessageHandler(filters.VIDEO, bot.handle_unsupported_file))
+    
+    # Handle audio uploads with helpful error messages
+    application.add_handler(MessageHandler(filters.AUDIO | filters.VOICE, bot.handle_unsupported_file))
+    
+    # Handle sticker uploads with helpful error messages
+    application.add_handler(MessageHandler(filters.Sticker.ALL, bot.handle_unsupported_file))
     
     # Handle text messages (questionnaire responses)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_questionnaire_response))

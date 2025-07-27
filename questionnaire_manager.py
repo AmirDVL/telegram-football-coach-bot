@@ -9,104 +9,130 @@ class QuestionnaireManager:
         self.data_file = data_file
         self.questions = {
             1: {
-                "text": "🏃‍♂️ سلام! بیا با هم شروع کنیم.\n\nاسم و فامیل خودت رو برام بنویس:",
+                "text": "🏃‍♂️ سلام! بیا با هم شروع کنیم.\n\nاسم و فامیل خودت رو بگو:",
                 "type": "text",
                 "emoji": "👤",
                 "validation": {"min_length": 2, "max_length": 50}
             },
             2: {
-                "text": "👤 ممنون {name}!\n\nحالا سنت رو بگو:",
+                "text": "🎂 سن؟",
                 "type": "number",
                 "emoji": "🎂",
                 "validation": {"min": 16, "max": 40}
             },
             3: {
-                "text": "📏 عالی!\n\nقدت چقدره؟ (برحسب سانتی‌متر)",
+                "text": "📏 قد؟ (برحسب سانتی‌متر)",
                 "type": "number",
                 "emoji": "📐",
                 "validation": {"min": 150, "max": 210}
             },
             4: {
-                "text": "⚖️ خوبه!\n\nوزنت چقدره؟ (برحسب کیلوگرم)",
+                "text": "⚖️ وزن؟ (برحسب کیلوگرم)",
                 "type": "number",
                 "emoji": "💪",
                 "validation": {"min": 40, "max": 120}
             },
             5: {
-                "text": "⚽ حالا در مورد تجربه فوتبالت بگو.\n\nتا حالا چه لیگی بازی کردی؟\n\n(مثل: لیگ دسته سوم، لیگ محلی، هیچ تجربه‌ای ندارم)",
+                "text": "⚽ چه لیگی بازی کردی؟",
                 "type": "text",
                 "emoji": "🏆",
                 "validation": {"min_length": 3, "max_length": 100}
             },
             6: {
-                "text": "⏰ خوب!\n\nروزانه چقدر وقت برای تمرین داری؟\n\n(مثل: 2 ساعت، 1 ساعت صبح و 1 ساعت عصر)",
+                "text": "⏰ چقدر وقت داری؟",
                 "type": "text",
                 "emoji": "🕐",
                 "validation": {"min_length": 3, "max_length": 50}
             },
             7: {
-                "text": "🎯 عالی!\n\nبرای چه لیگ و مسابقاتی میخوای آماده شی؟\n\n(مثل: لیگ دسته دوم، تست تیم محلی، بهتر شدن مهارت‌ها)",
+                "text": "🎯 برای چه لیگ و مسابقاتی می‌خواهی آماده بشی؟",
                 "type": "text",
                 "emoji": "🏁",
                 "validation": {"min_length": 5, "max_length": 100}
             },
             8: {
-                "text": "👥 خوبه!\n\nفصل بعد تیم داری یا میخوای تست بری؟",
-                "type": "choice",
+                "text": "👥 فصل بعد تیم داری یا می‌خواهی تست بدی؟",
+                "type": "text",
                 "emoji": "⚽",
-                "choices": ["تیم دارم", "میخوام تست برم", "هنوز مطمئن نیستم"]
+                "validation": {"min_length": 3, "max_length": 100}
             },
             9: {
-                "text": "💪 متوجه شدم.\n\nیک ماه گذشته تمرین هوازی و وزنه داشتی؟",
+                "text": "💪 یک ماه گذشته تمرین هوازی و وزنه داشتی؟",
                 "type": "choice",
                 "emoji": "🏋️‍♂️",
                 "choices": ["بله", "خیر"]
             },
             10: {
-                "text": "📋 جالبه!\n\nبا جزئیات برنامه تمرین هوازی و وزنه‌ات رو برام بفرست:\n\n(مثال: هر روز 30 دقیقه دویدن + سه‌شنبه و پنج‌شنبه وزنه)",
+                "text": "📋 اگر تمرین هوازی داشتی، جزئیات برنامه تمرین هوازی رو برام بفرست:",
                 "type": "text",
-                "emoji": "📝",
-                "validation": {"min_length": 10, "max_length": 200},
+                "emoji": "🏃",
+                "validation": {"min_length": 5, "max_length": 200},
                 "condition": {"step": 9, "answer": "بله"}
             },
             11: {
-                "text": "🏈 حالا از تجهیزاتت بگو.\n\nبرای تمرین هوازی، توپ، کنز، زمین دم دستت هست؟\n(براساس این تجهیزات برنامه تمرینت رو تنظیم می‌کنم)\n\n(مثال: توپ دارم، زمین پارک محله، کنز ندارم)",
+                "text": "🏋️ اگر تمرین وزنه داشتی، جزئیات برنامه وزنه‌ات رو برام بفرست:",
+                "type": "text",
+                "emoji": "🏋️‍♂️",
+                "validation": {"min_length": 5, "max_length": 200},
+                "condition": {"step": 9, "answer": "بله"}
+            },
+            12: {
+                "text": "⚽ برای تمرین هوازی توپ، کنز، زمین دم دستت هست؟",
                 "type": "text",
                 "emoji": "⚽",
                 "validation": {"min_length": 5, "max_length": 100}
             },
-            12: {
-                "text": "🎯 به عنوان یک بازیکن بزرگترین دغدغه‌ت چیه؟",
-                "type": "choice",
-                "emoji": "🎖️",
-                "choices": ["قدرت", "سرعت", "حجم عضلانی", "چابکی", "استقامت", "مهارت فنی"]
-            },
             13: {
-                "text": "🏃‍♂️ خوب!\n\nالان انفرادی تمرین می‌کنی یا با تیم؟",
+                "text": "🎯 به عنوان یک بازیکن، بزرگترین دغدغه‌ات چیه؟ (قدرت، سرعت، حجم و …)",
+                "type": "text",
+                "emoji": "🎖️",
+                "validation": {"min_length": 3, "max_length": 100}
+            },
+            14: {
+                "text": "🏥 آیا مصدومیت‌های خاصی در گذشته داشتی؟",
+                "type": "text",
+                "emoji": "⚠️",
+                "validation": {"min_length": 2, "max_length": 150}
+            },
+            15: {
+                "text": "🍎 وضعیت تغذیه و خواب چطور است؟",
+                "type": "text",
+                "emoji": "😴",
+                "validation": {"min_length": 5, "max_length": 150}
+            },
+            16: {
+                "text": "🏃‍♂️ الان انفرادی تمرین می‌کنی یا با تیم؟",
                 "type": "choice",
                 "emoji": "👥",
                 "choices": ["انفرادی", "با تیم", "ترکیبی از هر دو"]
             },
-            14: {
-                "text": "🤔 از نظر تو، سخت‌ترین مشکلات یا چالش‌هایی که تو تمرین کردن داری چیه؟\n\n(مثال: کمبود وقت، کمبود تجهیزات، عدم انگیزه، مصدومیت)",
+            17: {
+                "text": "🤔 از نظر تو، سخت‌ترین مشکلات یا چالش‌هایی که تو تمرین داری چیه؟",
                 "type": "text",
                 "emoji": "⚠️",
                 "validation": {"min_length": 5, "max_length": 150}
             },
-            15: {
-                "text": "💪 متوجه شدم.\n\nاگه قرار باشه یه قسمت از بدنتو تغییر بدی اون چیه؟\n\n(مثال: قدرت پاها، عضلات سینه، استقامت قلبی، انعطاف‌پذیری)",
+            18: {
+                "text": "� عکس از جلو، بغل و پشت برام بفرست برای آنالیز.\n\n⚠️ لطفاً سه عکس جداگانه ارسال کنید: یکی از جلو، یکی از پهلو و یکی از پشت.",
+                "type": "photo",
+                "emoji": "📷",
+                "photo_count": 3,
+                "validation": {"required": True}
+            },
+            19: {
+                "text": "💪 اگر قرار باشه یک قسمت از بدنتو تغییر بدی، اون چیه؟",
                 "type": "text",
                 "emoji": "🎯",
                 "validation": {"min_length": 3, "max_length": 100}
             },
-            16: {
+            20: {
                 "text": "📱 کدوم شبکه‌های اجتماعی رو بیشتر استفاده می‌کنی؟",
                 "type": "multichoice",
                 "emoji": "📲",
                 "choices": ["اینستاگرام", "تلگرام", "یوتیوب", "فیسبوک", "توییتر", "هیچ‌کدام"]
             },
-            17: {
-                "text": "📞 و در آخر...\n\nشماره‌تم بنویس!\n(برای هماهنگی‌های ضروری نیاز داریم)\n\n(مثال: 09123456789)",
+            21: {
+                "text": "📞 خب، شماره‌ات رو هم بنویس!\n(برای هماهنگی‌های ضروری نیاز داریم)\n\n(مثال: 09123456789)",
                 "type": "phone",
                 "emoji": "📱",
                 "validation": {"pattern": r"^09[0-9]{9}$"}
@@ -228,6 +254,10 @@ class QuestionnaireManager:
                     return False, f"گزینه '{choice}' نامعتبر است"
             return True, ""
 
+        elif question["type"] == "photo":
+            # Photo validation is handled separately in photo handler
+            return True, ""
+
         return True, ""
 
     async def process_answer(self, user_id: int, answer: str) -> Dict[str, Any]:
@@ -252,13 +282,13 @@ class QuestionnaireManager:
         next_step = current_step + 1
         
         # Skip conditional questions if needed
-        while next_step <= 17:
+        while next_step <= 21:
             next_question = self.get_question(next_step, progress["answers"])
             if next_question is not None:
                 break
             next_step += 1
         
-        if next_step > 17:
+        if next_step > 21:
             # Questionnaire completed
             progress["completed"] = True
             progress["completed_at"] = datetime.now().isoformat()
@@ -279,7 +309,7 @@ class QuestionnaireManager:
                 "status": "continue",
                 "question": next_question,
                 "step": next_step,
-                "progress_text": f"سوال {next_step} از 17"
+                "progress_text": f"سوال {next_step} از 21"
             }
 
     def get_completion_message(self) -> str:
@@ -314,23 +344,27 @@ class QuestionnaireManager:
     def get_question_title(self, step: int) -> str:
         """Get short title for each question"""
         titles = {
-            1: "نام",
+            1: "نام و فامیل",
             2: "سن", 
             3: "قد",
             4: "وزن",
             5: "تجربه لیگ",
             6: "وقت تمرین",
-            7: "هدف",
+            7: "هدف مسابقات",
             8: "وضعیت تیم",
             9: "تمرین اخیر",
-            10: "جزئیات تمرین",
-            11: "تجهیزات",
-            12: "اولویت اصلی",
-            13: "نوع تمرین",
-            14: "چالش‌ها",
-            15: "بهبود بدنی",
-            16: "شبکه‌های اجتماعی",
-            17: "شماره تماس"
+            10: "جزئیات تمرین هوازی",
+            11: "جزئیات تمرین وزنه",
+            12: "تجهیزات",
+            13: "اولویت اصلی",
+            14: "مصدومیت‌ها",
+            15: "تغذیه و خواب",
+            16: "نوع تمرین",
+            17: "چالش‌ها",
+            18: "عکس‌های بدن",
+            19: "بهبود بدنی",
+            20: "شبکه‌های اجتماعی",
+            21: "شماره تماس"
         }
         return titles.get(step, f"سوال {step}")
 
@@ -360,7 +394,7 @@ class QuestionnaireManager:
         
         if question:
             question["step"] = current_step
-            question["progress_text"] = f"سوال {current_step} از 17"
+            question["progress_text"] = f"سوال {current_step} از 21"
         
         return question
 
@@ -443,3 +477,96 @@ class QuestionnaireManager:
         except Exception as e:
             print(f"Error resetting questionnaire: {e}")
             return False
+
+    async def process_photo_answer(self, user_id: int, photo_file_id: str) -> Dict[str, Any]:
+        """Process photo answer for questionnaire"""
+        progress = await self.load_user_progress(user_id)
+        current_step = progress["current_step"]
+        
+        # Check if current question is a photo question
+        question = self.questions.get(current_step)
+        if not question or question.get("type") != "photo":
+            return {
+                "status": "error",
+                "message": "در حال حاضر عکس مورد نیاز نیست.",
+                "current_step": current_step
+            }
+        
+        # Initialize photos array if it doesn't exist
+        if "photos" not in progress["answers"]:
+            progress["answers"]["photos"] = {}
+        if str(current_step) not in progress["answers"]["photos"]:
+            progress["answers"]["photos"][str(current_step)] = []
+        
+        # Add photo to current step
+        progress["answers"]["photos"][str(current_step)].append(photo_file_id)
+        
+        # Check if we have enough photos for this question
+        photo_count = question.get("photo_count", 1)
+        current_photos = len(progress["answers"]["photos"][str(current_step)])
+        
+        if current_photos < photo_count:
+            # Need more photos
+            remaining = photo_count - current_photos
+            return {
+                "status": "need_more_photos",
+                "message": f"✅ عکس دریافت شد! ({current_photos}/{photo_count})\n\n📸 لطفاً {remaining} عکس دیگر ارسال کنید.",
+                "current_step": current_step,
+                "photos_received": current_photos,
+                "photos_needed": photo_count
+            }
+        
+        # We have enough photos, move to next step
+        progress["answers"][str(current_step)] = f"تصاویر ارسال شد ({photo_count} عکس)"
+        progress["last_updated"] = datetime.now().isoformat()
+        
+        # Determine next step
+        next_step = current_step + 1
+        
+        # Skip conditional questions if needed
+        while next_step <= 21:
+            next_question = self.get_question(next_step, progress["answers"])
+            if next_question is not None:
+                break
+            next_step += 1
+        
+        if next_step > 21:
+            # Questionnaire completed
+            progress["completed"] = True
+            progress["completed_at"] = datetime.now().isoformat()
+            await self.save_user_progress(user_id, progress)
+            
+            return {
+                "status": "completed",
+                "message": self.get_completion_message(),
+                "progress": progress
+            }
+        else:
+            # Move to next step
+            progress["current_step"] = next_step
+            await self.save_user_progress(user_id, progress)
+            
+            next_question = self.get_question(next_step, progress["answers"])
+            return {
+                "status": "continue",
+                "question": next_question,
+                "step": next_step,
+                "progress_text": f"سوال {next_step} از 21"
+            }
+
+    def is_current_question_photo(self, user_id: int) -> bool:
+        """Check if current question expects a photo"""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            progress = loop.run_until_complete(self.load_user_progress(user_id))
+            current_step = progress["current_step"]
+            question = self.questions.get(current_step)
+            return question and question.get("type") == "photo"
+        except Exception:
+            return False
+
+    async def get_user_photos(self, user_id: int) -> Dict[str, list]:
+        """Get all user photos from questionnaire"""
+        progress = await self.load_user_progress(user_id)
+        return progress["answers"].get("photos", {})

@@ -106,6 +106,24 @@ class DatabaseManager:
                 )
             """)
             
+            # User images table for questionnaire photos
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_images (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT REFERENCES users(user_id),
+                    payment_id INTEGER REFERENCES payments(id),
+                    question_step INTEGER NOT NULL,
+                    file_id VARCHAR(255) NOT NULL,
+                    compressed_file_id VARCHAR(255),
+                    image_type VARCHAR(50) DEFAULT 'body_analysis',
+                    image_order INTEGER DEFAULT 1,
+                    file_size INTEGER,
+                    compressed_size INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, payment_id, question_step, image_order)
+                )
+            """)
+            
             # Admins table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS admins (
@@ -143,6 +161,9 @@ class DatabaseManager:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_images_user_id ON user_images(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_images_payment_id ON user_images(payment_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_images_question_step ON user_images(question_step)")
             
             logger.info("Database tables created successfully")
     
@@ -352,3 +373,65 @@ class DatabaseManager:
                 INSERT INTO user_responses (user_id, payment_id, questionnaire_data)
                 VALUES ($1, $2, $3)
             """, user_id, payment_id, json.dumps({"responses": responses}))
+
+    # User image methods
+    async def save_user_image(self, user_id: int, payment_id: int, question_step: int, 
+                            file_id: str, image_order: int = 1, 
+                            compressed_file_id: str = None, file_size: int = None, 
+                            compressed_size: int = None) -> bool:
+        """Save user image information"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO user_images (user_id, payment_id, question_step, file_id, 
+                                           compressed_file_id, image_order, file_size, compressed_size)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (user_id, payment_id, question_step, image_order) 
+                    DO UPDATE SET 
+                        file_id = EXCLUDED.file_id,
+                        compressed_file_id = EXCLUDED.compressed_file_id,
+                        file_size = EXCLUDED.file_size,
+                        compressed_size = EXCLUDED.compressed_size,
+                        created_at = CURRENT_TIMESTAMP
+                """, user_id, payment_id, question_step, file_id, compressed_file_id, 
+                     image_order, file_size, compressed_size)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving user image: {e}")
+            return False
+
+    async def get_user_images(self, user_id: int, payment_id: int = None) -> list:
+        """Get user images"""
+        async with self.pool.acquire() as conn:
+            if payment_id:
+                rows = await conn.fetch("""
+                    SELECT * FROM user_images 
+                    WHERE user_id = $1 AND payment_id = $2
+                    ORDER BY question_step, image_order
+                """, user_id, payment_id)
+            else:
+                rows = await conn.fetch("""
+                    SELECT * FROM user_images 
+                    WHERE user_id = $1
+                    ORDER BY question_step, image_order
+                """, user_id)
+            
+            return [dict(row) for row in rows]
+
+    async def get_user_images_by_step(self, user_id: int, question_step: int, payment_id: int = None) -> list:
+        """Get user images for specific question step"""
+        async with self.pool.acquire() as conn:
+            if payment_id:
+                rows = await conn.fetch("""
+                    SELECT * FROM user_images 
+                    WHERE user_id = $1 AND question_step = $2 AND payment_id = $3
+                    ORDER BY image_order
+                """, user_id, question_step, payment_id)
+            else:
+                rows = await conn.fetch("""
+                    SELECT * FROM user_images 
+                    WHERE user_id = $1 AND question_step = $2
+                    ORDER BY image_order
+                """, user_id, question_step)
+            
+            return [dict(row) for row in rows]
