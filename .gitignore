@@ -70,6 +70,10 @@ main_backup.py
 *_backup.py
 *.backup
 *.bak
+*.sh
+Deployment_Linux.md
+bot.txt
+.gitignore_new
 
 # 🛠️ DEVELOPMENT SECURITY MODULES (not needed in production)
 security_config.py
