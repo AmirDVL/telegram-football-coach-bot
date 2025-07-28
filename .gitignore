@@ -39,6 +39,13 @@ debug.log
 database.db
 bot.db
 
+# 📊 DATABASE: Temporary database files and setup scripts
+add_admin.sql
+setup_database.sql
+*.sql
+!schema.sql
+!migrations/*.sql
+
 # 🔒 SECURITY: SSL Certificates and Keys
 *.pem
 *.key
@@ -62,29 +69,69 @@ backups/
 *.sql.gz
 *.tar.gz
 
-# 📚 DOCUMENTATION: Exclude documentation files (not needed on server)
-*.md
-!DEPLOYMENT_LINUX.md
-README*
-CHANGELOG*
-LICENSE*
-CONTRIBUTING*
-
-# 🖥️ PLATFORM-SPECIFIC: Windows scripts and files
-*.bat
-*.cmd
-*.ps1
-run_windows.py
-setup_windows.py
-install_windows.*
-
-# 🖥️ PLATFORM-SPECIFIC: Development and testing files
+# 🧪 TESTING AND DEVELOPMENT: Test files and temporary scripts
 test_*.py
 *_test.py
 tests/
 testing/
 dev_*.py
 development/
+debug_*.py
+clear_*.py
+fix_*.py
+restore_*.py
+
+# �️ TEMPORARY FILES: Cleanup and maintenance scripts
+clear_all_data.py
+clear_database.py
+clear_json_data.py
+debug_check.py
+fix_quotes.py
+restore_admin.py
+test_setup.py
+test_questionnaire.py
+test_bot.py
+test_postgresql_compatibility.py
+
+# 📋 EXCESSIVE DOCUMENTATION: Keep only essential documentation
+ADMIN_COMMAND_SOLUTION.md
+ADMIN_SYSTEM_GUIDE.md
+COMPLETE_GUIDE.md
+DEPLOYMENT_CHECKLIST.md
+DEPLOYMENT_REFERENCE.md
+GITHUB_SETUP.md
+HOSTING_OPTIONS.md
+MIGRATION_GUIDE.md
+POSTGRESQL_TEST_RESULTS.md
+SECURITY_GUIDE.md
+test_status_system.md
+
+# 🖥️ PLATFORM-SPECIFIC: Backup and alternative files
+main_backup.py
+*_backup.py
+*.backup
+run.bat
+setup.bat
+
+# 🚀 DEPLOYMENT: Temporary deployment and setup scripts
+bootstrap.sh
+deploy.sh
+deploy_production.sh
+deploy_shared_host.sh
+manage.sh
+quick_setup.sh
+security_hardening.sh
+security_setup.sh
+setup_debian.sh
+setup_postgres.ps1
+startup.sh
+update.sh
+
+# 🛠️ DEVELOPMENT: Configuration and security modules (development only)
+security_config.py
+security_integration.py
+security_monitor.py
+secure_database_manager.py
 
 # Distribution / packaging
 .Python
@@ -244,12 +291,10 @@ bot_data.json
 logs/
 *.db
 
-# 📚 INCLUDE: Documentation and Scripts (these should be committed)
-# Remove any exclusions for:
-*.md files (documentation)
-# *.bat files (Windows scripts)
-# *.ps1 files (PowerShell scripts)
-# *.sh files (deployment scripts)
-
-# Note: All .md, .bat, .ps1, and .sh files WILL be committed
-# This ensures documentation and deployment scripts are available on the server
+# � NOTE: Important files that SHOULD be included:
+# - README.md (main documentation)
+# - DEPLOYMENT_GUIDE.md (deployment instructions)  
+# - requirements.txt (dependencies)
+# - main.py (core bot code)
+# - All .py modules for bot functionality
+# - .env.example (template for environment variables)
