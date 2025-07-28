@@ -171,3 +171,65 @@ class AdminManager:
             return await self.save_admins(admins_data)
         
         return False
+    
+    async def sync_admins_from_config(self):
+        """Sync admins from Config.ADMIN_IDS to admins file"""
+        try:
+            from config import Config
+            
+            # Get admin IDs from config
+            admin_ids = Config.get_admin_ids()
+            
+            # Load current admins data
+            admins_data = await self.load_admins()
+            
+            if not admins_data:
+                admins_data = {
+                    'super_admin': None,
+                    'admins': [],
+                    'admin_permissions': {}
+                }
+            
+            # Ensure required keys exist
+            if 'admins' not in admins_data:
+                admins_data['admins'] = []
+            if 'admin_permissions' not in admins_data:
+                admins_data['admin_permissions'] = {}
+            
+            # Set first admin as super admin if no super admin exists
+            if not admins_data.get('super_admin') and admin_ids:
+                admins_data['super_admin'] = admin_ids[0]
+            
+            # Add each admin from config
+            synced_count = 0
+            for admin_id in admin_ids:
+                if admin_id not in admins_data['admins']:
+                    admins_data['admins'].append(admin_id)
+                    synced_count += 1
+                    print(f"Admin with ID {admin_id} added successfully.")
+                else:
+                    print(f"Admin with ID {admin_id} already exists.")
+                
+                # Ensure admin has permissions entry
+                admin_id_str = str(admin_id)
+                if admin_id_str not in admins_data['admin_permissions']:
+                    is_super = (admin_id == admins_data.get('super_admin'))
+                    admins_data['admin_permissions'][admin_id_str] = {
+                        'can_add_admins': is_super,
+                        'can_remove_admins': is_super,
+                        'can_view_users': True,
+                        'can_manage_payments': True,
+                        'added_by': 'config_sync',
+                        'added_date': datetime.now().isoformat(),
+                        'synced_from_config': True
+                    }
+            
+            # Save updated data
+            await self.save_admins(admins_data)
+            
+            print(f"Admin sync completed. {synced_count} new admins added.")
+            return True
+            
+        except Exception as e:
+            print(f"Error syncing admins from config: {e}")
+            return False

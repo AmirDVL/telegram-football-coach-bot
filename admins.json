@@ -9,8 +9,9 @@
       "can_remove_admins": true,
       "can_view_users": true,
       "can_manage_payments": true,
-      "added_by": "system",
-      "added_date": "2025-07-25T17:03:18.296953"
+      "added_by": "config_sync",
+      "added_date": "2025-07-28T10:32:42.886558",
+      "synced_from_config": true
     }
   }
 }

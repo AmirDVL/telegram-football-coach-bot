@@ -346,6 +346,59 @@ class DatabaseManager:
                     is_active = TRUE
             """, user_id, json.dumps(permissions), added_by)
     
+    async def sync_admins_from_config(self):
+        """Sync admins from environment config on startup"""
+        from config import Config
+        
+        admin_ids = Config.get_admin_ids()
+        if not admin_ids:
+            return
+        
+        print(f"🔄 Syncing {len(admin_ids)} admin(s) from configuration...")
+        
+        # Super admin permissions
+        super_admin_permissions = {
+            "can_add_admins": True,
+            "can_remove_admins": True,
+            "can_approve_payments": True,
+            "can_view_users": True,
+            "can_manage_courses": True,
+            "can_export_data": True,
+            "can_import_data": True,
+            "can_view_analytics": True
+        }
+        
+        async with self.pool.acquire() as conn:
+            for admin_id in admin_ids:
+                try:
+                    # Check if admin already exists
+                    exists = await conn.fetchval("""
+                        SELECT user_id FROM admins WHERE user_id = $1
+                    """, admin_id)
+                    
+                    if exists:
+                        # Update existing admin to ensure they're active
+                        await conn.execute("""
+                            UPDATE admins SET 
+                                is_active = TRUE,
+                                is_super_admin = TRUE,
+                                permissions = $2
+                            WHERE user_id = $1
+                        """, admin_id, json.dumps(super_admin_permissions))
+                        print(f"  ✅ Updated admin: {admin_id}")
+                    else:
+                        # Add new admin
+                        await conn.execute("""
+                            INSERT INTO admins (user_id, is_super_admin, permissions, added_by)
+                            VALUES ($1, TRUE, $2, $1)
+                        """, admin_id, json.dumps(super_admin_permissions))
+                        print(f"  ✅ Added new admin: {admin_id}")
+                        
+                except Exception as e:
+                    print(f"  ❌ Error syncing admin {admin_id}: {e}")
+        
+        print(f"🎉 Admin sync completed! {len(admin_ids)} admins are now active.")
+    
     # Statistics methods
     async def update_statistics(self, metric_name: str, increment: int = 1):
         """Update statistics"""

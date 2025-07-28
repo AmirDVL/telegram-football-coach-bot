@@ -1,6 +1,10 @@
 import logging
 import asyncio
 import os
+import json
+import csv
+import io
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -9,6 +13,7 @@ from data_manager import DataManager
 from admin_panel import AdminPanel
 from questionnaire_manager import QuestionnaireManager
 from image_processor import ImageProcessor
+from coupon_manager import CouponManager
 
 # Configure logging
 logging.basicConfig(
@@ -23,7 +28,53 @@ class FootballCoachBot:
         self.admin_panel = AdminPanel()
         self.questionnaire_manager = QuestionnaireManager()
         self.image_processor = ImageProcessor()
+        self.coupon_manager = CouponManager()
         self.payment_pending = {}
+        self.user_coupon_codes = {}  # Store coupon codes entered by users
+    
+    async def initialize(self):
+        """Initialize bot on startup - sync admins from config"""
+        try:
+            # Always sync admins through admin_manager regardless of storage type
+            await self.admin_panel.admin_manager.sync_admins_from_config()
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to sync admins: {e}")
+    
+    async def _sync_admins_json(self):
+        """Sync admins for JSON mode"""
+        admin_ids = Config.get_admin_ids()
+        if not admin_ids:
+            return
+        
+        print(f"🔄 Syncing {len(admin_ids)} admin(s) to JSON mode...")
+        
+        # Load existing admins
+        admins_data = await self.data_manager.load_data('admins')
+        
+        # Add any missing admins
+        for admin_id in admin_ids:
+            if not any(admin.get('user_id') == admin_id for admin in admins_data):
+                admins_data.append({
+                    'user_id': admin_id,
+                    'is_super_admin': True,
+                    'is_active': True,
+                    'permissions': {
+                        "can_add_admins": True,
+                        "can_remove_admins": True,
+                        "can_approve_payments": True,
+                        "can_view_users": True,
+                        "can_manage_courses": True,
+                        "can_export_data": True,
+                        "can_import_data": True,
+                        "can_view_analytics": True
+                    },
+                    'added_by': admin_id
+                })
+                print(f"  ✅ Added admin to JSON: {admin_id}")
+        
+        # Save updated admins
+        await self.data_manager.save_data('admins', admins_data)
+        print(f"🎉 Admin sync completed! {len(admin_ids)} admins are now active.")
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start command handler with intelligent status checking"""
@@ -48,16 +99,18 @@ class FootballCoachBot:
         """Show menu based on user's current status"""
         user_id = update.effective_user.id
         
+        # Check if user is admin first
+        is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
+        if is_admin:
+            await self.show_admin_start_menu(update, user_name, user_id)
+            return
+        
         # Determine user status
         status = await self.get_user_status(user_data)
         
         if status == 'new_user':
             # First-time user - show welcome and course selection
-            keyboard = [
-                [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            reply_markup = await self.create_course_selection_keyboard(user_id)
             welcome_text = f"سلام {user_name}! 👋\n\n" + Config.WELCOME_MESSAGE
             
         elif status == 'payment_pending':
@@ -77,14 +130,24 @@ class FootballCoachBot:
             course_name = user_data.get('course', 'نامشخص')
             
             if questionnaire_status.get('completed', False):
-                # Questionnaire completed, show program access
+                # Questionnaire completed, show comprehensive program access menu
+                # Get purchased courses for better context
+                purchased_courses = await self.get_user_purchased_courses(user_id)
+                course_count = len(purchased_courses)
+                
                 keyboard = [
                     [InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')],
                     [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
                     [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
-                    [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')]
+                    [InlineKeyboardButton("🔄 بروزرسانی پرسشنامه", callback_data='restart_questionnaire')],
+                    [InlineKeyboardButton("🛒 دوره جدید", callback_data='new_course')]
                 ]
-                welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!"
+                
+                # Enhanced welcome message showing completion status and purchased courses
+                if course_count > 1:
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                else:
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
             else:
                 # Questionnaire not completed
                 current_step = questionnaire_status.get('current_step', 1)
@@ -111,9 +174,9 @@ class FootballCoachBot:
             
         else:
             # Returning user without active course - show course selection
-            keyboard = [
-                [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')],
+            course_keyboard = await self.create_course_selection_keyboard(user_id)
+            # Add status button to the existing keyboard
+            keyboard = course_keyboard.inline_keyboard + [
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -126,11 +189,32 @@ class FootballCoachBot:
     
     async def get_user_status(self, user_data: dict) -> str:
         """Determine user's current status based on their data"""
+        user_id = user_data.get('user_id')
+        
         if not user_data or not user_data.get('started_bot'):
             return 'new_user'
         
-        payment_status = user_data.get('payment_status')
+        # Check payment status from the payments table
+        payments_data = await self.data_manager.load_data('payments')
+        user_payment = None
         
+        # Find the most recent payment for this user
+        for payment_id, payment_data in payments_data.items():
+            if payment_data.get('user_id') == user_id:
+                if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
+                    user_payment = payment_data
+        
+        if user_payment:
+            payment_status = user_payment.get('status')
+            if payment_status == 'pending':
+                return 'payment_pending'
+            elif payment_status == 'approved':
+                return 'payment_approved'
+            elif payment_status == 'rejected':
+                return 'payment_rejected'
+        
+        # Fallback to user_data payment_status (for backward compatibility)
+        payment_status = user_data.get('payment_status')
         if payment_status == 'pending_approval':
             return 'payment_pending'
         elif payment_status == 'approved':
@@ -142,25 +226,260 @@ class FootballCoachBot:
         else:
             return 'returning_user'
 
+    async def get_user_purchased_courses(self, user_id: int) -> set:
+        """Get set of course types that user has approved payments for"""
+        payments_data = await self.data_manager.load_data('payments')
+        purchased_courses = set()
+        
+        for payment_id, payment_data in payments_data.items():
+            if (payment_data.get('user_id') == user_id and 
+                payment_data.get('status') == 'approved'):
+                course_type = payment_data.get('course_type')
+                if course_type:
+                    purchased_courses.add(course_type)
+        
+        return purchased_courses
+
+    async def has_purchased_course(self, user_id: int, course_type: str) -> bool:
+        """Check if user has purchased a specific course"""
+        purchased_courses = await self.get_user_purchased_courses(user_id)
+        return course_type in purchased_courses
+
+    async def create_course_selection_keyboard(self, user_id: int = None) -> InlineKeyboardMarkup:
+        """Create course selection keyboard with tick marks for purchased courses"""
+        # If no user_id provided, show basic menu without tick marks
+        if user_id is None:
+            keyboard = [
+                [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
+                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')]
+            ]
+        else:
+            # Get purchased courses to add tick marks
+            purchased_courses = await self.get_user_purchased_courses(user_id)
+            
+            in_person_text = "1️⃣ دوره تمرین حضوری"
+            online_text = "2️⃣ دوره تمرین آنلاین"
+            
+            # Check if user has any in-person courses
+            if any(course in purchased_courses for course in ['in_person_cardio', 'in_person_weights']):
+                in_person_text += " ✅"
+            
+            # Check if user has any online courses  
+            if any(course in purchased_courses for course in ['online_weights', 'online_cardio', 'online_combo']):
+                online_text += " ✅"
+            
+            keyboard = [
+                [InlineKeyboardButton(in_person_text, callback_data='in_person')],
+                [InlineKeyboardButton(online_text, callback_data='online')]
+            ]
+        
+        return InlineKeyboardMarkup(keyboard)
+
+    async def show_admin_start_menu(self, update: Update, user_name: str, user_id: int) -> None:
+        """Show special start menu for admins"""
+        is_super = await self.admin_panel.admin_manager.is_super_admin(user_id)
+        can_manage_admins = await self.admin_panel.admin_manager.can_add_admins(user_id)
+        
+        keyboard = [
+            [InlineKeyboardButton("🎛️ پنل مدیریت", callback_data='admin_panel_main')],
+            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats')],
+            [InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
+            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users')]
+        ]
+        
+        # Add admin management for those with permission
+        if can_manage_admins:
+            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+        
+        # Add user mode option
+        keyboard.append([InlineKeyboardButton("👤 حالت کاربر عادی", callback_data='admin_user_mode')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
+        welcome_text = f"سلام {user_name}! 👋\n\n{admin_type} عزیز، به ربات مربی فوتبال خوش آمدید 🎛️\n\nانتخاب کنید:"
+        
+        if hasattr(update, 'message') and update.message:
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    async def handle_admin_start_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle admin start menu callbacks"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        
+        if not await self.admin_panel.admin_manager.is_admin(user_id):
+            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
+            return
+        
+        if query.data == 'admin_panel_main':
+            # Redirect to full admin panel
+            await self.admin_panel.admin_menu_callback(query)
+        elif query.data == 'admin_quick_stats':
+            await self.admin_panel.show_quick_statistics(query)
+        elif query.data == 'admin_pending_payments':
+            await self.admin_panel.show_pending_payments(query)
+        elif query.data == 'admin_new_users':
+            await self.admin_panel.show_new_users(query)
+        elif query.data == 'admin_manage_admins':
+            await self.admin_panel.show_admin_management(query, user_id)
+        elif query.data == 'admin_payments_detailed':
+            await self.admin_panel.show_payments_detailed_list(query)
+        elif query.data == 'admin_quick_approve':
+            await self.handle_quick_approve_all(query)
+        elif query.data == 'admin_user_mode':
+            # Show regular user interface
+            user_data = await self.data_manager.get_user_data(user_id)
+            user_name = update.effective_user.first_name or "ادمین"
+            # Temporarily skip admin check for this call
+            await self.show_regular_user_menu(update, user_data, user_name)
+
+    async def show_regular_user_menu(self, update: Update, user_data: dict, user_name: str) -> None:
+        """Show regular user menu (bypasses admin check)"""
+        user_id = update.effective_user.id
+        
+        # Determine user status
+        status = await self.get_user_status(user_data)
+        
+        if status == 'new_user':
+            # First-time user - show welcome and course selection
+            course_keyboard = await self.create_course_selection_keyboard(user_id)
+            # Add admin back button to the existing keyboard
+            keyboard = course_keyboard.inline_keyboard + [
+                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = f"سلام {user_name}! 👋\n\n" + Config.WELCOME_MESSAGE
+            
+        elif status == 'payment_pending':
+            # User has submitted payment, waiting for approval
+            course_name = user_data.get('course_selected', 'نامشخص')
+            keyboard = [
+                [InlineKeyboardButton("📊 وضعیت پرداخت", callback_data='check_payment_status')],
+                [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
+                [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')],
+                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = f"سلام {user_name}! 👋\n\n⏳ پرداخت شما برای دوره **{course_name}** در انتظار تایید است.\n\nمی‌توانید وضعیت پرداخت خود را بررسی کنید:"
+            
+        elif status == 'payment_approved':
+            # User payment approved, questionnaire pending or in progress
+            questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
+            course_name = user_data.get('course', 'نامشخص')
+            
+            if questionnaire_status.get('completed', False):
+                # Questionnaire completed, show comprehensive program access menu
+                # Get purchased courses for better context  
+                purchased_courses = await self.get_user_purchased_courses(user_id)
+                course_count = len(purchased_courses)
+                
+                keyboard = [
+                    [InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')],
+                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                    [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
+                    [InlineKeyboardButton("🔄 بروزرسانی پرسشنامه", callback_data='restart_questionnaire')],
+                    [InlineKeyboardButton("🛒 دوره جدید", callback_data='new_course')],
+                    [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
+                ]
+                
+                # Enhanced welcome message showing completion status and purchased courses
+                if course_count > 1:
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                else:
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+            else:
+                # Questionnaire not completed
+                current_step = questionnaire_status.get('current_step', 1)
+                total_steps = questionnaire_status.get('total_steps', 17)
+                keyboard = [
+                    [InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')],
+                    [InlineKeyboardButton("🔄 شروع مجدد پرسشنامه", callback_data='restart_questionnaire')],
+                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                    [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
+                ]
+                welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+        elif status == 'payment_rejected':
+            # Payment was rejected
+            course_name = user_data.get('course_selected', 'نامشخص')
+            keyboard = [
+                [InlineKeyboardButton("💳 پرداخت مجدد", callback_data=f'pay_{user_data.get("course_selected", "")}')],
+                [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
+                [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')],
+                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = f"سلام {user_name}! 👋\n\n❌ متاسفانه پرداخت شما برای دوره **{course_name}** تایید نشد.\n\nمی‌توانید مجدداً پرداخت کنید یا با پشتیبانی تماس بگیرید:"
+            
+        else:
+            # Returning user without active course - show course selection
+            course_keyboard = await self.create_course_selection_keyboard(user_id)
+            # Add additional buttons to the existing keyboard
+            keyboard = course_keyboard.inline_keyboard + [
+                [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = f"سلام {user_name}! 👋\n\nخوش برگشتی! چه کاری می‌تونم برات انجام بدم؟"
+        
+        if hasattr(update, 'callback_query') and update.callback_query:
+            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+
     async def handle_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle main menu selections"""
         query = update.callback_query
         await query.answer()
+        user_id = update.effective_user.id
         
         if query.data == 'in_person':
+            # Check which courses user has purchased
+            purchased_courses = await self.get_user_purchased_courses(user_id)
+            
+            # Create buttons with tick marks for purchased courses
+            cardio_text = "1️⃣ تمرین هوازی سرعتی چابکی کار با توپ"
+            weights_text = "2️⃣ تمرین وزنه"
+            
+            if 'in_person_cardio' in purchased_courses:
+                cardio_text += " ✅"
+            if 'in_person_weights' in purchased_courses:
+                weights_text += " ✅"
+            
             keyboard = [
-                [InlineKeyboardButton("1️⃣ تمرین هوازی سرعتی چابکی کار با توپ", callback_data='in_person_cardio')],
-                [InlineKeyboardButton("2️⃣ تمرین وزنه", callback_data='in_person_weights')],
+                [InlineKeyboardButton(cardio_text, callback_data='in_person_cardio')],
+                [InlineKeyboardButton(weights_text, callback_data='in_person_weights')],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
             
         elif query.data == 'online':
+            # Check which courses user has purchased
+            purchased_courses = await self.get_user_purchased_courses(user_id)
+            
+            # Create buttons with tick marks for purchased courses
+            weights_text = "1️⃣ برنامه وزنه"
+            cardio_text = "2️⃣ برنامه هوازی و کار با توپ"
+            combo_text = "3️⃣ برنامه وزنه + برنامه هوازی (با تخفیف بیشتر)"
+            
+            if 'online_weights' in purchased_courses:
+                weights_text += " ✅"
+            if 'online_cardio' in purchased_courses:
+                cardio_text += " ✅"
+            if 'online_combo' in purchased_courses:
+                combo_text += " ✅"
+            
             keyboard = [
-                [InlineKeyboardButton("1️⃣ برنامه وزنه", callback_data='online_weights')],
-                [InlineKeyboardButton("2️⃣ برنامه هوازی و کار با توپ", callback_data='online_cardio')],
-                [InlineKeyboardButton("3️⃣ برنامه وزنه + برنامه هوازی (با تخفیف بیشتر)", callback_data='online_combo')],
+                [InlineKeyboardButton(weights_text, callback_data='online_weights')],
+                [InlineKeyboardButton(cardio_text, callback_data='online_cardio')],
+                [InlineKeyboardButton(combo_text, callback_data='online_combo')],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -169,26 +488,130 @@ class FootballCoachBot:
     async def handle_course_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle detailed course information"""
         query = update.callback_query
-        await query.answer()
+        user_id = update.effective_user.id
         
         if query.data in Config.COURSE_DETAILS:
+            # Check if user already owns this course
+            if await self.has_purchased_course(user_id, query.data):
+                await query.answer(
+                    "✅ شما قبلاً این دوره را خریداری کرده‌اید!\n"
+                    "برای دسترسی به برنامه تمرینی خود از منو استفاده کنید.",
+                    show_alert=True
+                )
+                return
+            
+            await query.answer()
+            
             course = Config.COURSE_DETAILS[query.data]
             price = Config.PRICES[query.data]
             
-            # Format price properly
-            if price >= 1000000:
-                price_text = f"{price//1000:,} تومن"  # Convert to thousands
-            else:
-                price_text = f"{price:,} تومان"
+            # Format price properly using the utility function
+            price_text = Config.format_price(price)
             
             message_text = f"{course['title']}👇👇👇👇👇\n\n{course['description']}"
             
             keyboard = [
                 [InlineKeyboardButton(f"💳 پرداخت و ثبت نام ({price_text})", callback_data=f'payment_{query.data}')],
+                [InlineKeyboardButton("🏷️ کد تخفیف دارم", callback_data=f'coupon_{query.data}')],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(message_text, reply_markup=reply_markup)
+
+    async def handle_coupon_request(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle coupon code request"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        course_type = query.data.replace('coupon_', '')
+        
+        # Store course type for later use
+        self.payment_pending[user_id] = course_type
+        
+        await query.edit_message_text(
+            "🏷️ لطفاً کد تخفیف خود را وارد کنید:\n\n"
+            "💡 کد تخفیف را دقیقاً همانطور که دریافت کردید تایپ کنید.\n"
+            "❌ برای لغو، /start را تایپ کنید.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'{course_type}')]
+            ])
+        )
+        
+        # Store that we're waiting for coupon code
+        context.user_data['waiting_for_coupon'] = True
+        context.user_data['coupon_course'] = course_type
+
+    async def handle_coupon_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE, coupon_code: str) -> None:
+        """Handle coupon code validation and processing"""
+        user_id = update.effective_user.id
+        course_type = context.user_data.get('coupon_course')
+        
+        # Clear coupon waiting state
+        context.user_data['waiting_for_coupon'] = False
+        del context.user_data['coupon_course']
+        
+        if not course_type:
+            await update.message.reply_text(
+                "❌ خطایی رخ داده است. لطفاً مجدداً دوره را انتخاب کنید.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_main')]
+                ])
+            )
+            return
+        
+        # Validate coupon
+        is_valid, message, discount_percent = self.coupon_manager.validate_coupon(coupon_code.strip().upper())
+        
+        if not is_valid:
+            # Show error and offer to continue without coupon
+            course_details = Config.COURSE_DETAILS.get(course_type, {})
+            original_price = Config.PRICES.get(course_type, 0)
+            price_text = Config.format_price(original_price)
+            
+            keyboard = [
+                [InlineKeyboardButton(f"💳 ادامه بدون تخفیف ({price_text})", callback_data=f'payment_{course_type}')],
+                [InlineKeyboardButton("🏷️ کد تخفیف جدید", callback_data=f'coupon_{course_type}')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'{course_type}')]
+            ]
+            
+            await update.message.reply_text(
+                f"❌ {message}\n\n"
+                f"💡 می‌توانید بدون کد تخفیف ادامه دهید یا کد تخفیف دیگری وارد کنید.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+        
+        # Calculate discounted price
+        original_price = Config.PRICES.get(course_type, 0)
+        final_price, discount_amount = self.coupon_manager.calculate_discounted_price(original_price, coupon_code.strip().upper())
+        
+        # Store coupon for this user
+        self.user_coupon_codes[user_id] = {
+            'code': coupon_code.strip().upper(),
+            'discount_percent': discount_percent,
+            'discount_amount': discount_amount,
+            'course_type': course_type
+        }
+        
+        # Show discounted price and payment option
+        original_price_text = Config.format_price(original_price)
+        final_price_text = Config.format_price(final_price)
+        discount_amount_text = Config.format_price(discount_amount)
+        
+        keyboard = [
+            [InlineKeyboardButton(f"💳 پرداخت ({final_price_text})", callback_data=f'payment_coupon_{course_type}')],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data=f'{course_type}')]
+        ]
+        
+        await update.message.reply_text(
+            f"✅ {message}\n\n"
+            f"💰 قیمت اصلی: {original_price_text}\n"
+            f"🏷️ تخفیف ({discount_percent}%): -{discount_amount_text}\n"
+            f"💳 قیمت نهایی: {final_price_text}\n\n"
+            f"🎉 شما {discount_amount_text} صرفه‌جویی کردید!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     async def handle_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle payment process - go directly to payment"""
@@ -196,7 +619,39 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        course_type = query.data.replace('payment_', '')
+        
+        # Handle both regular payment and coupon payment
+        if query.data.startswith('payment_coupon_'):
+            course_type = query.data.replace('payment_coupon_', '')
+        else:
+            course_type = query.data.replace('payment_', '')
+        
+        # 🚫 DUPLICATE PURCHASE PREVENTION
+        # Check if user already has an approved payment for this course
+        if await self.check_duplicate_purchase(user_id, course_type):
+            await query.edit_message_text(
+                "⚠️ شما قبلاً این دوره را خریداری کرده‌اید!\n\n"
+                "✅ پرداخت شما تایید شده و دسترسی فعال است.\n\n"
+                "📋 اگر پرسشنامه را تکمیل نکرده‌اید، لطفاً تکمیل کنید.\n"
+                "📞 برای سوالات بیشتر با پشتیبانی تماس بگیرید.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                ])
+            )
+            return
+        
+        # Check if user has a pending payment for this course
+        if await self.check_pending_purchase(user_id, course_type):
+            await query.edit_message_text(
+                "⏳ شما قبلاً برای این دوره پرداخت کرده‌اید!\n\n"
+                "🔍 پرداخت شما در حال بررسی توسط ادمین است.\n"
+                "📱 از نتیجه بررسی مطلع خواهید شد.\n\n"
+                "💡 اگر نیاز به پرداخت مجدد دارید، ابتدا با پشتیبانی تماس بگیرید.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                ])
+            )
+            return
         
         # Store the course type for this user
         self.payment_pending[user_id] = course_type
@@ -204,12 +659,240 @@ class FootballCoachBot:
         # Go directly to payment details (questionnaire comes after approval)
         await self.show_payment_details(update, context, course_type)
 
+    async def check_duplicate_purchase(self, user_id: int, course_type: str) -> bool:
+        """Check if user already has an approved payment for this course"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            payments = data.get('payments', {})
+            
+            for payment_data in payments.values():
+                if (payment_data.get('user_id') == user_id and 
+                    payment_data.get('course_type') == course_type and 
+                    payment_data.get('status') == 'approved'):
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"Error checking duplicate purchase: {e}")
+            return False
+
+    async def check_pending_purchase(self, user_id: int, course_type: str) -> bool:
+        """Check if user has a pending payment for this course"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            payments = data.get('payments', {})
+            
+            for payment_data in payments.values():
+                if (payment_data.get('user_id') == user_id and 
+                    payment_data.get('course_type') == course_type and 
+                    payment_data.get('status') == 'pending_approval'):
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"Error checking pending purchase: {e}")
+            return False
+
+    async def handle_csv_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle CSV file imports for admins"""
+        user_id = update.effective_user.id
+        
+        # Check if user is admin
+        if not await self.admin_panel.admin_manager.is_admin(user_id):
+            await update.message.reply_text("❌ شما دسترسی ادمین ندارید.")
+            return
+        
+        document = update.message.document
+        
+        # Check if it's a CSV file
+        if not (document.file_name.endswith('.csv') or document.mime_type == 'text/csv'):
+            await update.message.reply_text(
+                "❌ فقط فایل‌های CSV پذیرفته می‌شوند!\n\n"
+                "📋 برای راهنمای واردات، از منوی ادمین > واردات/صادرات استفاده کنید."
+            )
+            return
+        
+        # Check file size (max 5MB)
+        if document.file_size > 5 * 1024 * 1024:
+            await update.message.reply_text("❌ حجم فایل نباید بیشتر از ۵ مگابایت باشد!")
+            return
+        
+        try:
+            # Download file
+            file = await context.bot.get_file(document.file_id)
+            file_content = await file.download_as_bytearray()
+            
+            # Decode CSV content
+            csv_content = file_content.decode('utf-8')
+            
+            # Determine import type based on headers
+            lines = csv_content.strip().split('\n')
+            if len(lines) < 2:
+                await update.message.reply_text("❌ فایل CSV خالی است یا فرمت صحیح ندارد!")
+                return
+            
+            headers = lines[0].lower().split(',')
+            
+            # Check if it's users or payments import
+            if 'user_id' in headers and 'name' in headers:
+                await self.import_users_csv(update, csv_content)
+            elif 'user_id' in headers and 'course_type' in headers and 'price' in headers:
+                await self.import_payments_csv(update, csv_content)
+            else:
+                await update.message.reply_text(
+                    "❌ فرمت CSV شناخته نشده!\n\n"
+                    "🔍 فرمت‌های پشتیبانی شده:\n"
+                    "• کاربران: user_id,name,username,course_selected,payment_status\n"
+                    "• پرداخت‌ها: user_id,course_type,price,status"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error processing CSV import: {e}")
+            await update.message.reply_text(f"❌ خطا در پردازش فایل: {str(e)}")
+
+    async def import_users_csv(self, update: Update, csv_content: str) -> None:
+        """Import users from CSV content"""
+        try:
+            csv_reader = csv.DictReader(io.StringIO(csv_content))
+            
+            imported_count = 0
+            errors = []
+            
+            for row_num, row in enumerate(csv_reader, 2):  # Start from row 2 (after header)
+                try:
+                    user_id = int(row.get('user_id', '').strip())
+                    name = row.get('name', '').strip()
+                    username = row.get('username', '').strip()
+                    course_selected = row.get('course_selected', '').strip()
+                    payment_status = row.get('payment_status', '').strip()
+                    
+                    if not user_id or not name:
+                        errors.append(f"سطر {row_num}: user_id و name ضروری هستند")
+                        continue
+                    
+                    # Validate course type
+                    valid_courses = ['in_person_weights', 'in_person_cardio', 'online_weights', 'online_cardio', 'online_combo']
+                    if course_selected and course_selected not in valid_courses:
+                        errors.append(f"سطر {row_num}: نوع دوره نامعتبر: {course_selected}")
+                        continue
+                    
+                    # Validate payment status
+                    valid_statuses = ['pending_approval', 'approved', 'rejected', '']
+                    if payment_status and payment_status not in valid_statuses:
+                        errors.append(f"سطر {row_num}: وضعیت پرداخت نامعتبر: {payment_status}")
+                        continue
+                    
+                    # Save user data
+                    user_data = {
+                        'name': name,
+                        'username': username,
+                        'course_selected': course_selected,
+                        'payment_status': payment_status,
+                        'imported_at': datetime.now().isoformat(),
+                        'imported_by': update.effective_user.id
+                    }
+                    
+                    await self.data_manager.save_user_data(user_id, user_data)
+                    imported_count += 1
+                    
+                except ValueError:
+                    errors.append(f"سطر {row_num}: user_id باید عدد باشد")
+                except Exception as e:
+                    errors.append(f"سطر {row_num}: {str(e)}")
+            
+            # Send result
+            result_text = f"✅ واردات کاربران تکمیل شد!\n\n"
+            result_text += f"📊 تعداد وارد شده: {imported_count} کاربر\n"
+            
+            if errors:
+                result_text += f"⚠️ تعداد خطا: {len(errors)}\n\n"
+                result_text += "🔸 خطاها:\n"
+                for error in errors[:10]:  # Show max 10 errors
+                    result_text += f"• {error}\n"
+                if len(errors) > 10:
+                    result_text += f"... و {len(errors) - 10} خطای دیگر"
+            
+            await update.message.reply_text(result_text)
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در واردات کاربران: {str(e)}")
+
+    async def import_payments_csv(self, update: Update, csv_content: str) -> None:
+        """Import payments from CSV content"""
+        try:
+            csv_reader = csv.DictReader(io.StringIO(csv_content))
+            
+            imported_count = 0
+            errors = []
+            
+            for row_num, row in enumerate(csv_reader, 2):  # Start from row 2 (after header)
+                try:
+                    user_id = int(row.get('user_id', '').strip())
+                    course_type = row.get('course_type', '').strip()
+                    price = int(row.get('price', '').strip())
+                    status = row.get('status', '').strip()
+                    
+                    if not user_id or not course_type or not price:
+                        errors.append(f"سطر {row_num}: user_id، course_type و price ضروری هستند")
+                        continue
+                    
+                    # Validate course type
+                    valid_courses = ['in_person_weights', 'in_person_cardio', 'online_weights', 'online_cardio', 'online_combo']
+                    if course_type not in valid_courses:
+                        errors.append(f"سطر {row_num}: نوع دوره نامعتبر: {course_type}")
+                        continue
+                    
+                    # Validate status
+                    valid_statuses = ['pending_approval', 'approved', 'rejected', 'pending']
+                    if status and status not in valid_statuses:
+                        errors.append(f"سطر {row_num}: وضعیت نامعتبر: {status}")
+                        continue
+                    
+                    # Save payment data
+                    payment_data = {
+                        'course_type': course_type,
+                        'price': price,
+                        'status': status if status else 'pending_approval',
+                        'imported_at': datetime.now().isoformat(),
+                        'imported_by': update.effective_user.id
+                    }
+                    
+                    await self.data_manager.save_payment_data(user_id, payment_data)
+                    imported_count += 1
+                    
+                except ValueError:
+                    errors.append(f"سطر {row_num}: user_id و price باید عدد باشند")
+                except Exception as e:
+                    errors.append(f"سطر {row_num}: {str(e)}")
+            
+            # Send result
+            result_text = f"✅ واردات پرداخت‌ها تکمیل شد!\n\n"
+            result_text += f"📊 تعداد وارد شده: {imported_count} پرداخت\n"
+            
+            if errors:
+                result_text += f"⚠️ تعداد خطا: {len(errors)}\n\n"
+                result_text += "🔸 خطاها:\n"
+                for error in errors[:10]:  # Show max 10 errors
+                    result_text += f"• {error}\n"
+                if len(errors) > 10:
+                    result_text += f"... و {len(errors) - 10} خطای دیگر"
+            
+            await update.message.reply_text(result_text)
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در واردات پرداخت‌ها: {str(e)}")
+
     async def start_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_type: str) -> None:
         """Start the questionnaire process"""
         query = update.callback_query
         user_id = update.effective_user.id
         
-        # Get the first question
+        # Start the questionnaire and get the first question
+        await self.questionnaire_manager.start_questionnaire(user_id)
         question = await self.questionnaire_manager.get_current_question(user_id)
         
         if question:
@@ -243,21 +926,65 @@ class FootballCoachBot:
             await self.show_payment_details(update, context, course_type)
 
     async def show_payment_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_type: str) -> None:
-        """Show payment details"""
+        """Show payment details with coupon support"""
         user_id = update.effective_user.id
         
-        # Save payment initiation
-        await self.data_manager.save_payment_data(user_id, {
-            'course_type': course_type,
-            'price': Config.PRICES[course_type],
-            'status': 'pending'
+        # Check if user has applied a coupon
+        coupon_info = self.user_coupon_codes.get(user_id)
+        original_price = Config.PRICES[course_type]
+        final_price = original_price
+        
+        if coupon_info and coupon_info.get('course_type') == course_type:
+            final_price = original_price - coupon_info.get('discount_amount', 0)
+            
+            # Mark coupon as used
+            self.coupon_manager.use_coupon(coupon_info['code'])
+            
+            # Clear coupon from user session
+            del self.user_coupon_codes[user_id]
+        
+        # Save course selection in user data
+        await self.data_manager.save_user_data(user_id, {
+            'course_selected': course_type
         })
+        
+        # Save payment initiation with final price
+        payment_data = {
+            'course_type': course_type,
+            'price': final_price,
+            'original_price': original_price,
+            'status': 'pending'
+        }
+        
+        if coupon_info:
+            payment_data.update({
+                'coupon_code': coupon_info['code'],
+                'discount_percent': coupon_info['discount_percent'],
+                'discount_amount': coupon_info['discount_amount']
+            })
+        
+        await self.data_manager.save_payment_data(user_id, payment_data)
+        
+        # Format prices properly
+        final_price_text = Config.format_price(final_price)
         
         payment_message = f"""برای پرداخت به شماره کارت زیر واریز کنید:
 
 💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
-💰 مبلغ: {Config.PRICES[course_type]:,} تومان
+💰 مبلغ: {final_price_text}"""
+        
+        if coupon_info:
+            original_price_text = Config.format_price(original_price)
+            discount_amount_text = Config.format_price(coupon_info['discount_amount'])
+            payment_message += f"""
+
+🏷️ کد تخفیف: {coupon_info['code']}
+💰 قیمت اصلی: {original_price_text}
+🎯 تخفیف: -{discount_amount_text}
+✅ قیمت نهایی: {final_price_text}"""
+        
+        payment_message += """
 
 بعد از واریز، فیش یا اسکرین شات رو همینجا ارسال کنید تا بررسی شه ✅
 
@@ -292,15 +1019,37 @@ class FootballCoachBot:
             await self.handle_questionnaire_photo(update, context)
             return
         
-        # Handle payment receipt validation
-        if user_id not in self.payment_pending:
+        # Check user's payment status from database
+        user_data = await self.data_manager.get_user_data(user_id)
+        payment_status = user_data.get('payment_status')
+        course_selected = user_data.get('course_selected')
+        
+        # Only accept photos if user has selected a course but hasn't submitted receipt yet
+        if not course_selected:
             await update.message.reply_text(
-                "❌ هیچ درخواست پرداختی برای شما ثبت نشده است!\n\n"
-                "مراحل صحیح:\n"
-                "1️⃣ ابتدا یک دوره انتخاب کنید\n"
-                "2️⃣ پرسشنامه را تکمیل کنید\n"
-                "3️⃣ سپس فیش واریز را ارسال کنید\n\n"
-                "برای شروع دوباره /start را بزنید."
+                "❌ ابتدا یک دوره انتخاب کنید!\n\n"
+                "برای شروع /start را بزنید."
+            )
+            return
+        
+        # If payment is already submitted or approved/rejected, don't accept more photos
+        if payment_status == 'pending_approval':
+            await update.message.reply_text(
+                "✅ فیش واریز شما قبلاً دریافت شده است!\n\n"
+                "⏳ در حال بررسی توسط ادمین...\n"
+                "📱 از وضعیت پرداخت مطلع خواهید شد."
+            )
+            return
+        elif payment_status == 'approved':
+            await update.message.reply_text(
+                "✅ پرداخت شما قبلاً تایید شده است!\n\n"
+                "📋 لطفا پرسشنامه را تکمیل کنید."
+            )
+            return
+        elif payment_status == 'rejected':
+            await update.message.reply_text(
+                "❌ پرداخت قبلی شما رد شده است.\n\n"
+                "📞 لطفا با پشتیبانی تماس بگیرید."
             )
             return
         
@@ -325,7 +1074,7 @@ class FootballCoachBot:
             )
             return
         
-        course_type = self.payment_pending[user_id]
+        course_type = course_selected  # Get from user_data instead of payment_pending
         
         try:
             # Save receipt info with photo file_id
@@ -349,32 +1098,29 @@ class FootballCoachBot:
             
             # Notify admin for approval
             if Config.ADMIN_ID:
-                admin_message = (f"🔔 درخواست تایید پرداخت جدید:\n\n"
-                               f"👤 کاربر: {update.effective_user.first_name} (@{update.effective_user.username or 'بدون نام کاربری'})\n"
+                admin_message = (f"🔔 درخواست تایید پرداخت جدید\n\n"
+                               f"👤 کاربر: {update.effective_user.first_name}\n"
+                               f"📱 نام کاربری: @{update.effective_user.username or 'ندارد'}\n"
                                f"🆔 User ID: {user_id}\n"
                                f"📚 دوره: {course_title}\n"
-                               f"💰 مبلغ: {price:,} تومان\n"
-                               f"📸 ابعاد تصویر: {photo.width}×{photo.height}\n"
-                               f"📦 حجم فایل: {photo.file_size // 1024 if photo.file_size else 'نامشخص'} KB\n\n"
-                               f"⚠️ فیش واریز ارسال شده - لطفا بررسی کنید")
+                               f"💰 مبلغ: {price:,} تومان\n\n"
+                               f"⬇️ فیش واریز ارسالی:")
                 
-                # Create approval buttons for admin
+                # Create enhanced approval buttons
                 keyboard = [
-                    [InlineKeyboardButton("✅ تایید پرداخت", callback_data=f'approve_payment_{user_id}')],
-                    [InlineKeyboardButton("❌ رد پرداخت", callback_data=f'reject_payment_{user_id}')]
+                    [
+                        InlineKeyboardButton("✅ تایید", callback_data=f'approve_payment_{user_id}'),
+                        InlineKeyboardButton("❌ رد", callback_data=f'reject_payment_{user_id}')
+                    ],
+                    [InlineKeyboardButton(" مدیریت پرداخت‌ها", callback_data='admin_pending_payments')]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                # Forward the photo to admin
-                await context.bot.forward_message(
+                # Send photo with caption and approval buttons combined
+                await context.bot.send_photo(
                     chat_id=Config.ADMIN_ID,
-                    from_chat_id=update.effective_chat.id,
-                    message_id=update.message.message_id
-                )
-                
-                await context.bot.send_message(
-                    chat_id=Config.ADMIN_ID, 
-                    text=admin_message,
+                    photo=photo.file_id,
+                    caption=admin_message,
                     reply_markup=reply_markup
                 )
                 
@@ -465,6 +1211,13 @@ class FootballCoachBot:
         """Handle non-photo file uploads with helpful error messages"""
         user_id = update.effective_user.id
         
+        # Check if it's a CSV file and user is admin
+        if update.message.document and update.message.document.file_name:
+            filename = update.message.document.file_name.lower()
+            if filename.endswith('.csv') and await self.admin_panel.admin_manager.is_admin(user_id):
+                await self.handle_csv_import(update, context)
+                return
+        
         # Check if user is in questionnaire mode
         current_question = await self.questionnaire_manager.get_current_question(user_id)
         
@@ -502,51 +1255,8 @@ class FootballCoachBot:
                 "❓ اگر سوالی دارید /help را بزنید"
             )
 
-    async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle questionnaire responses"""
-        user_id = update.effective_user.id
-        
-        # Get user data
-        user_data = await self.data_manager.get_user_data(user_id)
-        
-        if user_data.get('awaiting_form'):
-            # Save questionnaire responses
-            await self.data_manager.save_user_data(user_id, {
-                'questionnaire': update.message.text,
-                'awaiting_form': False,
-                'registration_complete': True
-            })
-            
-            await update.message.reply_text("""🎉 عالی! اطلاعات شما دریافت شد.
-
-برنامه تمرینی شما بر اساس اطلاعات ارائه شده طراحی میشه و ظرف ۲۴ ساعت براتون ارسال میشه.
-
-از اینکه به خانواده ما پیوستید خوشحالیم! 💪⚽️
-
-برای هر سوال یا مشکل، همیشه در دسترس هستم 🤝""")
-            
-            # Update statistics
-            await self.data_manager.update_statistics('total_users')
-            
-            # Notify admin with full details
-            if Config.ADMIN_ID:
-                try:
-                    admin_message = f"""📝 فرم جدید دریافت شد:
-👤 کاربر: {update.effective_user.first_name} (@{update.effective_user.username or 'بدون نام کاربری'})
-🆔 User ID: {user_id}
-📚 دوره: {user_data.get('course', 'نامشخص')}
-📄 پاسخ‌ها:
-{update.message.text[:1000]}{'...' if len(update.message.text) > 1000 else ''}"""
-                    
-                    await context.bot.send_message(chat_id=Config.ADMIN_ID, text=admin_message)
-                except Exception as e:
-                    logger.error(f"Failed to send admin notification: {e}")
-        else:
-            # Handle regular messages
-            await update.message.reply_text("سلام! برای شروع دوباره /start را بزنید.")
-
     async def handle_payment_approval(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle admin payment approval/rejection"""
+        """Handle admin payment approval/rejection and user profile viewing"""
         query = update.callback_query
         await query.answer()
         
@@ -561,31 +1271,62 @@ class FootballCoachBot:
             await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
             return
         
+        # Handle user profile viewing
+        if query.data.startswith('view_user_'):
+            target_user_id = int(query.data.replace('view_user_', ''))
+            await self.show_user_profile(query, target_user_id)
+            return
+        
         # Extract user_id and action from callback data
         if query.data.startswith('approve_payment_'):
-            user_id = int(query.data.replace('approve_payment_', ''))
+            target_user_id = int(query.data.replace('approve_payment_', ''))
             action = 'approve'
         elif query.data.startswith('reject_payment_'):
-            user_id = int(query.data.replace('reject_payment_', ''))
+            target_user_id = int(query.data.replace('reject_payment_', ''))
             action = 'reject'
         else:
             await query.edit_message_text("❌ داده نامعتبر.")
             return
         
         # Get user data
-        user_data = await self.data_manager.get_user_data(user_id)
+        user_data = await self.data_manager.get_user_data(target_user_id)
         
         if not user_data.get('receipt_submitted'):
             await query.edit_message_text("❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
             return
         
         if action == 'approve':
-            # Approve payment
-            course_type = self.payment_pending.get(user_id)
-            if not course_type:
-                course_type = user_data.get('course_selected')
+            # Find and approve the most recent payment for this user
+            payments_data = await self.data_manager.load_data('payments')
+            user_payment = None
+            payment_id = None
             
-            await self.data_manager.save_user_data(user_id, {
+            # Find the most recent pending payment for this user
+            for pid, payment_data in payments_data.items():
+                if (payment_data.get('user_id') == target_user_id and 
+                    payment_data.get('status') == 'pending'):
+                    if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
+                        user_payment = payment_data
+                        payment_id = pid
+            
+            if not user_payment:
+                await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
+                return
+            
+            course_type = user_payment.get('course_type')
+            if not course_type:
+                await query.edit_message_text("❌ نوع دوره برای این کاربر مشخص نیست.")
+                return
+            
+            # Update payment status in payments table
+            user_payment['status'] = 'approved'
+            user_payment['approved_by'] = update.effective_user.id
+            user_payment['approved_at'] = datetime.now().isoformat()
+            payments_data[payment_id] = user_payment
+            await self.data_manager.save_data('payments', payments_data)
+            
+            # Update user data
+            await self.data_manager.save_user_data(target_user_id, {
                 'payment_verified': True,
                 'awaiting_form': True,
                 'course': course_type,
@@ -598,63 +1339,192 @@ class FootballCoachBot:
                 await self.data_manager.update_statistics(f'course_{course_type}')
             
             # Remove from pending payments
-            if user_id in self.payment_pending:
-                del self.payment_pending[user_id]
+            if target_user_id in self.payment_pending:
+                del self.payment_pending[target_user_id]
             
             # Notify user and start questionnaire
             try:
                 await context.bot.send_message(
-                    chat_id=user_id,
+                    chat_id=target_user_id,
                     text="✅ پرداخت شما تایید شد! \n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:"
                 )
                 
                 # Start the questionnaire
-                question = await self.questionnaire_manager.get_current_question(user_id)
+                await self.questionnaire_manager.start_questionnaire(target_user_id)
+                question = await self.questionnaire_manager.get_current_question(target_user_id)
                 if question:
-                    await self.questionnaire_manager.send_question(context.bot, user_id, question)
+                    await self.questionnaire_manager.send_question(context.bot, target_user_id, question)
                 
             except Exception as e:
-                logger.error(f"Failed to notify user {user_id}: {e}")
+                logger.error(f"Failed to notify user {target_user_id}: {e}")
             
             # Update admin message
             course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص') if course_type else 'نامشخص'
-            price = Config.PRICES.get(course_type, 0) if course_type else 0
+            price = user_payment.get('price', 0)
             
             updated_message = f"""✅ پرداخت تایید شد:
 👤 کاربر: {user_data.get('name', 'ناشناس')}
-🆔 User ID: {user_id}
+🆔 User ID: {target_user_id}
 📚 دوره: {course_title}
-💰 مبلغ: {price:,} تومان
+💰 مبلغ: {Config.format_price(price)}
 ⏰ تایید شده توسط: {update.effective_user.first_name}"""
             
-            await query.edit_message_text(updated_message)
+            # Edit caption for photo messages, text for text messages
+            try:
+                await query.edit_message_caption(caption=updated_message)
+            except Exception:
+                # Fallback to edit_message_text if it's not a photo message
+                await query.edit_message_text(updated_message)
             
         elif action == 'reject':
             # Reject payment
-            await self.data_manager.save_user_data(user_id, {
+            await self.data_manager.save_user_data(target_user_id, {
                 'payment_status': 'rejected'
             })
             
             # Remove from pending payments
-            if user_id in self.payment_pending:
-                del self.payment_pending[user_id]
+            if target_user_id in self.payment_pending:
+                del self.payment_pending[target_user_id]
             
             # Notify user
             try:
                 await context.bot.send_message(
-                    chat_id=user_id,
+                    chat_id=target_user_id,
                     text="❌ متاسفانه پرداخت شما تایید نشد. لطفا با پشتیبانی تماس بگیرید یا فیش صحیح را ارسال کنید."
                 )
             except Exception as e:
-                logger.error(f"Failed to notify user {user_id}: {e}")
+                logger.error(f"Failed to notify user {target_user_id}: {e}")
             
             # Update admin message
             updated_message = f"""❌ پرداخت رد شد:
 👤 کاربر: {user_data.get('name', 'ناشناس')}
-🆔 User ID: {user_id}
+🆔 User ID: {target_user_id}
 ⏰ رد شده توسط: {update.effective_user.first_name}"""
             
-            await query.edit_message_text(updated_message)
+            # Edit caption for photo messages, text for text messages
+            try:
+                await query.edit_message_caption(caption=updated_message)
+            except Exception:
+                # Fallback to edit_message_text if it's not a photo message
+                await query.edit_message_text(updated_message)
+
+    async def show_user_profile(self, query, target_user_id: int) -> None:
+        """Show detailed user profile for admin review"""
+        try:
+            user_data = await self.data_manager.get_user_data(target_user_id)
+            
+            if not user_data:
+                await query.edit_message_text(f"❌ کاربر با ID {target_user_id} یافت نشد.")
+                return
+            
+            # Get user info from Telegram
+            try:
+                chat_member = await query.bot.get_chat(target_user_id)
+                telegram_name = chat_member.first_name
+                username = f"@{chat_member.username}" if chat_member.username else "ندارد"
+            except:
+                telegram_name = "نامشخص"
+                username = "ندارد"
+            
+            # Build profile message
+            profile_text = f"""👤 پروفایل کاربر
+            
+🆔 شناسه: {target_user_id}
+📱 نام تلگرام: {telegram_name}
+🔗 نام کاربری: {username}
+📚 دوره انتخابی: {user_data.get('course_selected', 'انتخاب نشده')}
+💳 وضعیت پرداخت: {self.get_payment_status_text(user_data.get('payment_status'))}
+📋 وضعیت پرسشنامه: {self.get_questionnaire_status_text(user_data)}
+📅 تاریخ ثبت نام: {user_data.get('registration_date', 'نامشخص')}
+
+📊 آمار کاربر:
+• تعداد پیام‌ها: {user_data.get('message_count', 0)}
+• آخرین فعالیت: {user_data.get('last_activity', 'نامشخص')}
+"""
+            
+            # Add questionnaire responses if available
+            if user_data.get('questionnaire_responses'):
+                responses = user_data['questionnaire_responses']
+                profile_text += f"\n📝 پاسخ‌های پرسشنامه:\n"
+                profile_text += f"• نام: {responses.get('full_name', 'ندارد')}\n"
+                profile_text += f"• سن: {responses.get('age', 'ندارد')}\n"
+                profile_text += f"• قد: {responses.get('height', 'ندارد')} سانتی‌متر\n"
+                profile_text += f"• وزن: {responses.get('weight', 'ندارد')} کیلوگرم\n"
+                if responses.get('phone'):
+                    profile_text += f"• شماره تلفن: {responses['phone']}\n"
+            
+            # Create action buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ تایید پرداخت", callback_data=f'approve_payment_{target_user_id}'),
+                    InlineKeyboardButton("❌ رد پرداخت", callback_data=f'reject_payment_{target_user_id}')
+                ],
+                [InlineKeyboardButton(" بازگشت", callback_data='admin_pending_payments')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(profile_text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در بارگیری پروفایل: {str(e)}")
+    
+    def get_payment_status_text(self, status):
+        """Convert payment status to readable text"""
+        status_map = {
+            'pending_approval': '⏳ در انتظار تایید',
+            'approved': '✅ تایید شده',
+            'rejected': '❌ رد شده',
+            None: '❓ نامشخص'
+        }
+        return status_map.get(status, '❓ نامشخص')
+    
+    def get_questionnaire_status_text(self, user_data):
+        """Get questionnaire completion status"""
+        if user_data.get('questionnaire_completed'):
+            return '✅ تکمیل شده'
+        elif user_data.get('questionnaire_started'):
+            return '🔄 در حال انجام'
+        else:
+            return '❌ شروع نشده'
+
+    async def handle_quick_approve_all(self, query) -> None:
+        """Handle quick approval of multiple payments with confirmation"""
+        try:
+            # Get pending payments
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            payments = data.get('payments', {})
+            pending = {k: v for k, v in payments.items() if v.get('status') == 'pending_approval'}
+            
+            if not pending:
+                await query.edit_message_text("✅ هیچ پرداخت معلقی برای تایید وجود ندارد!")
+                return
+            
+            # Show confirmation dialog
+            total_amount = sum(p.get('price', 0) for p in pending.values())
+            text = f"""⚠️ تایید دسته‌جمعی پرداخت‌ها
+            
+📊 تعداد پرداخت‌ها: {len(pending)} مورد
+💰 مجموع مبلغ: {total_amount:,} تومان
+
+آیا از تایید همه پرداخت‌های معلق اطمینان دارید؟
+
+⚠️ این عمل قابل بازگشت نیست!"""
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ تایید همه", callback_data='confirm_approve_all'),
+                    InlineKeyboardButton("❌ انصراف", callback_data='admin_pending_payments')
+                ],
+                [InlineKeyboardButton("👁️ مشاهده جزئیات", callback_data='admin_payments_detailed')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا: {str(e)}")
 
     async def handle_questionnaire_choice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle choice answers from questionnaire"""
@@ -700,15 +1570,73 @@ class FootballCoachBot:
             await self.complete_questionnaire(update, context)
 
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle text responses from questionnaire"""
+        """Handle text responses from questionnaire or coupon codes"""
         user_id = update.effective_user.id
         text_answer = update.message.text
+        
+        # Check if we're waiting for a coupon code
+        if context.user_data.get('waiting_for_coupon'):
+            await self.handle_coupon_code(update, context, text_answer)
+            return
+        
+        # Check user's payment status first using the proper method
+        user_data = await self.data_manager.get_user_data(user_id)
+        user_status = await self.get_user_status(user_data)
+        
+        # If user is in payment process, ignore text inputs
+        if user_status == 'payment_pending':
+            await update.message.reply_text(
+                "⏳ در حال بررسی پرداخت شما توسط ادمین هستیم.\n\n"
+                "📸 لطفا فقط فیش واریز ارسال کنید و منتظر تایید بمانید.\n"
+                "💬 پس از تایید، پرسشنامه برایتان ارسال خواهد شد."
+            )
+            return
+        elif user_status == 'payment_rejected':
+            await update.message.reply_text(
+                "❌ پرداخت شما رد شده است.\n\n"
+                "📞 لطفا با پشتیبانی تماس بگیرید یا مجددا اقدام به پرداخت کنید."
+            )
+            return
+        elif user_status != 'payment_approved':
+            # Check if user has selected a course but hasn't uploaded receipt
+            course_selected = user_data.get('course_selected')
+            
+            if course_selected:
+                # User selected course but hasn't uploaded payment receipt - ask for photo
+                await update.message.reply_text(
+                    "💳 شما دوره را انتخاب کرده‌اید اما هنوز فیش واریز ارسال نکرده‌اید.\n\n"
+                    "📸 لطفاً فیش واریز یا اسکرین‌شات پرداخت خود را ارسال کنید.\n\n"
+                    "⚠️ توجه: فقط عکس (تصویر) ارسال کنید، نه متن!"
+                )
+            else:
+                # User hasn't selected course yet - show helpful message
+                keyboard = [
+                    [InlineKeyboardButton("🏁 شروع", callback_data='start_over')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    "سلام! 👋\n\n"
+                    "برای استفاده از ربات، ابتدا باید یک دوره انتخاب کنید.\n\n"
+                    "👇 برای شروع دکمه زیر را بزنید:",
+                    reply_markup=reply_markup
+                )
+            return
         
         # Check if user is in questionnaire mode
         current_question = await self.questionnaire_manager.get_current_question(user_id)
         
         if not current_question:
-            # User is not in questionnaire mode, ignore
+            # User is not in questionnaire mode - show helpful message
+            keyboard = [
+                [InlineKeyboardButton("📝 شروع پرسشنامه", callback_data='start_questionnaire')],
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "شما در حال حاضر در مرحله پرسشنامه نیستید.\n\n"
+                "👇 برای شروع پرسشنامه دکمه زیر را بزنید:",
+                reply_markup=reply_markup
+            )
             return
         
         # Get the current step from the question
@@ -804,6 +1732,45 @@ class FootballCoachBot:
             mock_update = update
             await self.show_payment_details(mock_update, context, course_type)
 
+    async def start_questionnaire_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start questionnaire directly from callback"""
+        query = update.callback_query
+        user_id = update.effective_user.id
+        
+        # Check if user's payment is approved
+        user_data = await self.data_manager.get_user_data(user_id)
+        payment_status = user_data.get('payment_status')
+        
+        if payment_status != 'approved':
+            await query.edit_message_text(
+                "❌ برای شروع پرسشنامه ابتدا باید پرداخت شما تایید شود.\n\n"
+                "لطفا ابتدا یک دوره انتخاب کنید و پرداخت کنید."
+            )
+            return
+        
+        # Start the questionnaire
+        result = await self.questionnaire_manager.start_questionnaire(user_id)
+        
+        if result["status"] == "success":
+            question = result["question"]
+            message = f"""{result['progress_text']}
+
+{question['text']}"""
+            
+            keyboard = []
+            if question.get('type') == 'choice':
+                choices = question.get('choices', [])
+                for choice in choices:
+                    keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+            else:
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(message, reply_markup=reply_markup)
+        else:
+            await query.edit_message_text(f"❌ خطا در شروع پرسشنامه: {result['message']}")
+
     async def back_to_main(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Return to main menu"""
         query = update.callback_query
@@ -841,6 +1808,12 @@ class FootballCoachBot:
             await self.show_coach_contact(update, context)
         elif query.data == 'new_course':
             await self.start_new_course_selection(update, context)
+        elif query.data == 'start_over':
+            # Restart the bot flow from the beginning
+            await self.start(update, context)
+        elif query.data == 'start_questionnaire':
+            # Start the questionnaire directly
+            await self.start_questionnaire_from_callback(update, context)
 
     async def show_user_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show comprehensive user status"""
@@ -946,9 +1919,15 @@ class FootballCoachBot:
         # Get current question
         question = await self.questionnaire_manager.get_current_question(user_id)
         if question:
-            await self.questionnaire_manager.send_question(query.message.bot, user_id, question)
+            await self.questionnaire_manager.send_question(context.bot, user_id, question)
         else:
-            await query.edit_message_text("❌ خطا در بارگذاری پرسشنامه. لطفاً مجدداً تلاش کنید.")
+            # No current progress, start new questionnaire
+            await self.questionnaire_manager.start_questionnaire(user_id)
+            question = await self.questionnaire_manager.get_current_question(user_id)
+            if question:
+                await self.questionnaire_manager.send_question(context.bot, user_id, question)
+            else:
+                await query.edit_message_text("❌ خطا در بارگذاری پرسشنامه. لطفاً مجدداً تلاش کنید.")
 
     async def restart_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Restart questionnaire from beginning"""
@@ -961,7 +1940,7 @@ class FootballCoachBot:
         # Start from first question
         question = await self.questionnaire_manager.get_current_question(user_id)
         if question:
-            await self.questionnaire_manager.send_question(query.message.bot, user_id, question)
+            await self.questionnaire_manager.send_question(context.bot, user_id, question)
         else:
             await query.edit_message_text("❌ خطا در شروع مجدد پرسشنامه.")
 
@@ -1033,9 +2012,10 @@ class FootballCoachBot:
 
     async def start_new_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start new course selection process"""
-        keyboard = [
-            [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-            [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')],
+        user_id = update.effective_user.id
+        course_keyboard = await self.create_course_selection_keyboard(user_id)
+        # Add status button to the existing keyboard
+        keyboard = course_keyboard.inline_keyboard + [
             [InlineKeyboardButton("📊 وضعیت فعلی", callback_data='my_status')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1082,18 +2062,22 @@ def main():
     
     # Add handlers
     application.add_handler(CommandHandler("start", bot.start))
+    # Hidden admin command - works but not shown in menu
     application.add_handler(CommandHandler("admin", bot.admin_panel.admin_menu))
-    application.add_handler(CommandHandler("id", bot.admin_panel.get_id_command))
     application.add_handler(CommandHandler("add_admin", bot.admin_panel.add_admin_command))
     application.add_handler(CommandHandler("remove_admin", bot.admin_panel.remove_admin_command))
     
     application.add_handler(CallbackQueryHandler(bot.handle_main_menu, pattern='^(in_person|online)$'))
     application.add_handler(CallbackQueryHandler(bot.handle_course_details, pattern='^(in_person_cardio|in_person_weights|online_weights|online_cardio|online_combo)$'))
     application.add_handler(CallbackQueryHandler(bot.handle_payment, pattern='^payment_'))
+    application.add_handler(CallbackQueryHandler(bot.handle_coupon_request, pattern='^coupon_'))
     application.add_handler(CallbackQueryHandler(bot.handle_questionnaire_choice, pattern='^q_answer_'))
-    application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_)'))
-    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course)$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_)'))
+    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
+    # Admin start menu handlers (must come before generic admin_ handler)
+    application.add_handler(CallbackQueryHandler(bot.handle_admin_start_callbacks, pattern='^(admin_panel_main|admin_quick_stats|admin_pending_payments|admin_new_users|admin_manage_admins|admin_user_mode|admin_back_start|admin_payments_detailed|admin_quick_approve|confirm_approve_all)$'))
+    # Generic admin handlers (catch remaining admin_ callbacks)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^admin_'))
     
     # Handle photo messages (payment receipts and questionnaire photos)
@@ -1108,11 +2092,25 @@ def main():
     # Add error handler
     application.add_error_handler(bot.error_handler)
     
+    # Set up bot commands menu (only user-visible commands)
+    async def setup_commands(app):
+        from telegram import BotCommand
+        commands = [
+            BotCommand("start", "شروع ربات و نمایش منوی اصلی")
+        ]
+        await app.bot.set_my_commands(commands)
+        
+        # Initialize bot (sync admins from config)
+        await bot.initialize()
+    
+    # Initialize commands on startup
+    application.post_init = setup_commands
+    
     # Start the bot
     logger.info("Starting Football Coach Bot...")
     print("🤖 Football Coach Bot is starting...")
     print("📱 Bot is ready to receive messages!")
-    
+
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:

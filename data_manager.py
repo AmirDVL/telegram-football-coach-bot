@@ -110,3 +110,75 @@ class DataManager:
         except Exception as e:
             print(f"Error updating statistics: {e}")
             return False
+    
+    async def sync_admins_from_config(self):
+        """Sync admins from Config.ADMIN_IDS to data store"""
+        try:
+            from config import Config
+            
+            # Get admin IDs from config
+            admin_ids = Config.ADMIN_IDS
+            
+            # Read current data
+            async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                bot_data = json.loads(content) if content else {}
+            
+            if 'admins' not in bot_data:
+                bot_data['admins'] = {}
+            
+            # Add each admin from config
+            synced_count = 0
+            for admin_id in admin_ids:
+                admin_id_str = str(admin_id)
+                if admin_id_str not in bot_data['admins']:
+                    bot_data['admins'][admin_id_str] = {
+                        'user_id': admin_id,
+                        'permissions': 'full',
+                        'added_at': datetime.now().isoformat(),
+                        'synced_from_config': True
+                    }
+                    synced_count += 1
+                    print(f"Admin with ID {admin_id} added successfully.")
+                else:
+                    print(f"Admin with ID {admin_id} already exists.")
+            
+            # Save updated data
+            async with aiofiles.open(self.data_file, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(bot_data, ensure_ascii=False, indent=2))
+            
+            print(f"Admin sync completed. {synced_count} new admins added.")
+            return True
+            
+        except Exception as e:
+            print(f"Error syncing admins from config: {e}")
+            return False
+    
+    async def is_admin(self, user_id: int) -> bool:
+        """Check if user is admin"""
+        try:
+            async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                bot_data = json.loads(content) if content else {}
+            
+            admins = bot_data.get('admins', {})
+            return str(user_id) in admins
+            
+        except Exception as e:
+            print(f"Error checking admin status: {e}")
+            return False
+
+    async def load_data(self, data_type: str = None) -> Dict[str, Any]:
+        """Load data from file"""
+        try:
+            async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                bot_data = json.loads(content) if content else {}
+            
+            if data_type:
+                return bot_data.get(data_type, {})
+            return bot_data
+            
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            return {}

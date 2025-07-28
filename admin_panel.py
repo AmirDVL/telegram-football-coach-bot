@@ -2,12 +2,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from admin_manager import AdminManager
 from data_manager import DataManager
+from coupon_manager import CouponManager
+from config import Config
 import json
+import csv
+import io
+from datetime import datetime
 
 class AdminPanel:
     def __init__(self):
         self.admin_manager = AdminManager()
         self.data_manager = DataManager()
+        self.coupon_manager = CouponManager()
     
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Main admin menu"""
@@ -23,13 +29,12 @@ class AdminPanel:
         keyboard = [
             [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
-            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')]
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
+            [InlineKeyboardButton("📥 واردات/صادرات داده", callback_data='admin_import_export')]
         ]
         
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        keyboard.append([InlineKeyboardButton("🆔 نمایش ID من", callback_data='admin_my_id')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -55,16 +60,38 @@ class AdminPanel:
             await self.show_users_management(query)
         elif query.data == 'admin_payments':
             await self.show_payments_management(query)
+        elif query.data == 'admin_import_export':
+            await self.show_import_export_menu(query)
+        elif query.data == 'admin_coupons':
+            await self.show_coupon_management(query)
+        elif query.data == 'admin_export_users':
+            await self.export_users_csv(query)
+        elif query.data == 'admin_export_payments':
+            await self.export_payments_csv(query)
+        elif query.data == 'admin_export_telegram':
+            await self.export_telegram_csv(query)
+        elif query.data == 'admin_export_all':
+            await self.export_all_data(query)
+        elif query.data == 'admin_template_users':
+            await self.generate_users_template(query)
+        elif query.data == 'admin_template_payments':
+            await self.generate_payments_template(query)
+        elif query.data == 'admin_import_users':
+            await self.show_import_instructions(query, 'users')
+        elif query.data == 'admin_import_payments':
+            await self.show_import_instructions(query, 'payments')
+        elif query.data == 'admin_view_coupons':
+            await self.show_coupons_list(query)
         elif query.data == 'admin_manage_admins':
             await self.show_admin_management(query, user_id)
-        elif query.data == 'admin_my_id':
-            await self.show_my_id(query, user_id)
         elif query.data.startswith('admin_add_admin_'):
             await self.handle_add_admin(query, user_id)
         elif query.data.startswith('admin_remove_admin_'):
             await self.handle_remove_admin(query, user_id)
         elif query.data == 'admin_back_main':
             await self.back_to_admin_main(query, user_id)
+        elif query.data == 'admin_back_start':
+            await self.back_to_admin_start(query, user_id)
     
     async def show_statistics(self, query) -> None:
         """Show bot statistics"""
@@ -79,7 +106,11 @@ class AdminPanel:
             
             total_users = len(users)
             total_payments = len(payments)
-            total_revenue = sum(payment.get('price', 0) for payment in payments.values())
+            # Only count approved payments for revenue calculation
+            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
+            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
+            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
+            rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
             
             # Course statistics
             course_stats = {}
@@ -92,7 +123,10 @@ class AdminPanel:
 
 👥 تعداد کل کاربران: {total_users}
 💳 تعداد کل پرداخت‌ها: {total_payments}
-💰 درآمد کل: {total_revenue:,} تومان
+  ✅ تایید شده: {approved_payments}
+  ⏳ در انتظار: {pending_payments}
+  ❌ رد شده: {rejected_payments}
+💰 درآمد کل (تایید شده): {total_revenue:,} تومان
 
 📚 آمار دوره‌ها:"""
             
@@ -139,25 +173,6 @@ class AdminPanel:
         
         await query.edit_message_text(text, reply_markup=reply_markup)
     
-    async def show_my_id(self, query, user_id: int) -> None:
-        """Show user's ID"""
-        is_super = await self.admin_manager.is_super_admin(user_id)
-        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        
-        text = f"""🆔 اطلاعات شما:
-
-{admin_type}
-📱 Chat ID: `{user_id}`
-👤 نام: {query.from_user.first_name or 'نامشخص'}
-🔗 نام کاربری: @{query.from_user.username or 'ندارد'}
-
-💡 از این ID برای افزودن به .env استفاده کنید"""
-        
-        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-    
     async def show_users_management(self, query) -> None:
         """Show users management"""
         try:
@@ -197,8 +212,10 @@ class AdminPanel:
             text = "💳 مدیریت پرداخت‌ها:\n\n"
             text += f"📊 تعداد کل: {len(payments)} پرداخت\n"
             
-            total_revenue = sum(payment.get('price', 0) for payment in payments.values())
-            text += f"💰 درآمد کل: {total_revenue:,} تومان\n\n"
+            # Only count approved payments for revenue calculation
+            approved_payments = [p for p in payments.values() if p.get('status') == 'approved']
+            total_revenue = sum(payment.get('price', 0) for payment in approved_payments)
+            text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
             
             # Show recent 5 payments
             recent_payments = list(payments.items())[-5:]
@@ -226,18 +243,42 @@ class AdminPanel:
         keyboard = [
             [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
-            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')]
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
+            [InlineKeyboardButton("📥 واردات/صادرات داده", callback_data='admin_import_export')]
         ]
         
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
-        keyboard.append([InlineKeyboardButton("🆔 نمایش ID من", callback_data='admin_my_id')])
-        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
         welcome_text = f"سلام {admin_type}!\n\nبه پنل مدیریت خوش آمدید 🎛️"
+        
+        await query.edit_message_text(welcome_text, reply_markup=reply_markup)
+    
+    async def back_to_admin_start(self, query, user_id: int) -> None:
+        """Return to admin start menu"""
+        is_super = await self.admin_manager.is_super_admin(user_id)
+        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
+        user_name = query.from_user.first_name or "ادمین"
+        
+        keyboard = [
+            [InlineKeyboardButton("🎛️ پنل مدیریت", callback_data='admin_panel_main')],
+            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats')],
+            [InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
+            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users')]
+        ]
+        
+        if can_manage_admins:
+            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+        
+        keyboard.append([InlineKeyboardButton("👤 حالت کاربر عادی", callback_data='admin_user_mode')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
+        welcome_text = f"سلام {user_name}! 👋\n\n{admin_type} عزیز، به ربات مربی فوتبال خوش آمدید 🎛️\n\nانتخاب کنید:"
         
         await query.edit_message_text(welcome_text, reply_markup=reply_markup)
     
@@ -319,3 +360,632 @@ class AdminPanel:
 🔗 نام کاربری: @{username or 'ندارد'}"""
         
         await update.message.reply_text(text, parse_mode='Markdown')
+
+    async def admin_menu_callback(self, query) -> None:
+        """Admin menu accessible via callback (from admin start menu)"""
+        user_id = query.from_user.id
+        
+        if not await self.admin_manager.is_admin(user_id):
+            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
+            return
+        
+        is_super = await self.admin_manager.is_super_admin(user_id)
+        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
+            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')]
+        ]
+        
+        if can_manage_admins:
+            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+        
+        keyboard.append([InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
+        welcome_text = f"🎛️ پنل مدیریت کامل\n\n{admin_type} - انتخاب کنید:"
+        
+        await query.edit_message_text(welcome_text, reply_markup=reply_markup)
+    
+    async def show_quick_statistics(self, query) -> None:
+        """Show quick statistics for admin start menu"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            users = data.get('users', {})
+            payments = data.get('payments', {})
+            
+            total_users = len(users)
+            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
+            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
+            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
+            
+            stats_text = f"""📊 آمار سریع:
+
+👥 کل کاربران: {total_users}
+⏳ پرداخت‌های معلق: {pending_payments}
+✅ پرداخت‌های تایید شده: {approved_payments}
+💰 درآمد کل: {total_revenue:,} تومان"""
+            
+            keyboard = [
+                [InlineKeyboardButton("📊 آمار کامل", callback_data='admin_stats')],
+                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(stats_text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در بارگیری آمار: {str(e)}")
+    
+    async def show_pending_payments(self, query) -> None:
+        """Show pending payments for quick admin access"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            payments = data.get('payments', {})
+            pending = {k: v for k, v in payments.items() if v.get('status') == 'pending_approval'}
+            
+            if not pending:
+                text = "✅ هیچ پرداخت معلقی وجود ندارد!"
+            else:
+                text = f"⏳ پرداخت‌های معلق ({len(pending)} مورد):\n\n"
+                for payment_id, payment in list(pending.items())[:5]:  # Show max 5
+                    user_name = payment.get('user_name', 'نامشخص')
+                    amount = payment.get('price', 0)
+                    course = payment.get('course', 'نامشخص')
+                    text += f"👤 {user_name} - {course}\n💰 {amount:,} تومان\n\n"
+                
+                if len(pending) > 5:
+                    text += f"... و {len(pending) - 5} مورد دیگر"
+            
+            keyboard = [
+                [InlineKeyboardButton("💳 مدیریت کامل پرداخت‌ها", callback_data='admin_payments')],
+                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در بارگیری پرداخت‌ها: {str(e)}")
+    
+    async def show_new_users(self, query) -> None:
+        """Show new users for quick admin access"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            users = data.get('users', {})
+            
+            # Sort by registration (users with payments are considered "new" if recent)
+            new_users = []
+            for user_id, user_data in users.items():
+                if user_data.get('started_bot', False):
+                    new_users.append((user_id, user_data))
+            
+            # Get the 10 most recent users
+            recent_users = new_users[-10:] if len(new_users) > 10 else new_users
+            
+            if not recent_users:
+                text = "🤷‍♂️ هیچ کاربر جدیدی یافت نشد."
+            else:
+                text = f"👥 کاربران اخیر ({len(recent_users)} نفر):\n\n"
+                for user_id, user_data in recent_users:
+                    name = user_data.get('name', 'نامشخص')
+                    course = user_data.get('course', 'بدون دوره')
+                    status = user_data.get('payment_status', 'نامشخص')
+                    text += f"👤 {name} ({user_id})\n📚 {course} - {status}\n\n"
+            
+            keyboard = [
+                [InlineKeyboardButton("👥 مدیریت کامل کاربران", callback_data='admin_users')],
+                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در بارگیری کاربران: {str(e)}")
+
+    # 📥 IMPORT/EXPORT FUNCTIONALITY
+    async def show_import_export_menu(self, query) -> None:
+        """Show import/export options menu"""
+        text = """📥 مدیریت واردات/صادرات داده
+
+انتخاب کنید:"""
+        
+        keyboard = [
+            [InlineKeyboardButton("📤 صادرات کاربران (CSV)", callback_data='admin_export_users')],
+            [InlineKeyboardButton("📤 صادرات پرداخت‌ها (CSV)", callback_data='admin_export_payments')],
+            [InlineKeyboardButton("📤 صادرات تلگرام‌ها (CSV)", callback_data='admin_export_telegram')],
+            [InlineKeyboardButton("📤 پشتیبان کامل (JSON)", callback_data='admin_export_all')],
+            [InlineKeyboardButton("📋 دانلود نمونه کاربران", callback_data='admin_template_users')],
+            [InlineKeyboardButton("📋 دانلود نمونه پرداخت‌ها", callback_data='admin_template_payments')],
+            [InlineKeyboardButton("📥 واردات کاربران", callback_data='admin_import_users')],
+            [InlineKeyboardButton("📥 واردات پرداخت‌ها", callback_data='admin_import_payments')],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def export_users_csv(self, query) -> None:
+        """Export users data to CSV format"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            users = data.get('users', {})
+            
+            if not users:
+                await query.edit_message_text(
+                    "📭 هیچ کاربری برای صادرات وجود ندارد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]
+                    ])
+                )
+                return
+            
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
+            headers = [
+                'user_id', 'name', 'username', 'course_selected', 'payment_status',
+                'questionnaire_completed', 'registration_date', 'last_interaction'
+            ]
+            writer.writerow(headers)
+            
+            # Write user data
+            for user_id, user_data in users.items():
+                row = [
+                    user_id,
+                    user_data.get('name', ''),
+                    user_data.get('username', ''),
+                    user_data.get('course_selected', ''),
+                    user_data.get('payment_status', ''),
+                    user_data.get('questionnaire_completed', False),
+                    user_data.get('last_updated', ''),
+                    user_data.get('last_interaction', '')
+                ]
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send CSV file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"users_export_{timestamp}.csv"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(csv_content.encode('utf-8')),
+                filename=filename,
+                caption=f"📤 صادرات کاربران\n\n"
+                       f"📊 تعداد: {len(users)} کاربر\n"
+                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل CSV کاربران ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در صادرات کاربران: {str(e)}")
+
+    async def export_payments_csv(self, query) -> None:
+        """Export payments data to CSV format"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            payments = data.get('payments', {})
+            
+            if not payments:
+                await query.edit_message_text(
+                    "📭 هیچ پرداختی برای صادرات وجود ندارد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]
+                    ])
+                )
+                return
+            
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
+            headers = [
+                'payment_id', 'user_id', 'course_type', 'price', 'status',
+                'payment_date', 'approval_date', 'rejection_reason'
+            ]
+            writer.writerow(headers)
+            
+            # Write payment data
+            for payment_id, payment_data in payments.items():
+                row = [
+                    payment_id,
+                    payment_data.get('user_id', ''),
+                    payment_data.get('course_type', ''),
+                    payment_data.get('price', ''),
+                    payment_data.get('status', ''),
+                    payment_data.get('timestamp', ''),
+                    payment_data.get('approval_date', ''),
+                    payment_data.get('rejection_reason', '')
+                ]
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send CSV file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"payments_export_{timestamp}.csv"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(csv_content.encode('utf-8')),
+                filename=filename,
+                caption=f"📤 صادرات پرداخت‌ها\n\n"
+                       f"📊 تعداد: {len(payments)} پرداخت\n"
+                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل CSV پرداخت‌ها ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در صادرات پرداخت‌ها: {str(e)}")
+
+    async def export_all_data(self, query) -> None:
+        """Export complete database as JSON with admin-friendly format"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Create admin-friendly simplified data structure
+            admin_data = {
+                "export_info": {
+                    "generated_date": datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+                    "total_users": len(data.get('users', {})),
+                    "total_payments": len(data.get('payments', {})),
+                    "description": "پشتیبان کامل داده‌های ربات مربی فوتبال"
+                },
+                "users_summary": [],
+                "payments_summary": [],
+                "complete_data": data  # Original data for technical recovery
+            }
+            
+            # Create user summaries for easy reading
+            users = data.get('users', {})
+            for user_id, user_data in users.items():
+                user_summary = {
+                    "user_id": user_id,
+                    "name": user_data.get('name', 'نامشخص'),
+                    "username": user_data.get('username', ''),
+                    "phone": user_data.get('phone', ''),
+                    "course": user_data.get('course_selected', ''),
+                    "payment_status": user_data.get('payment_status', ''),
+                    "questionnaire_completed": user_data.get('questionnaire_completed', False),
+                    "registration_date": user_data.get('last_updated', '')
+                }
+                admin_data["users_summary"].append(user_summary)
+            
+            # Create payment summaries for easy reading
+            payments = data.get('payments', {})
+            for payment_id, payment_data in payments.items():
+                payment_summary = {
+                    "payment_id": payment_id,
+                    "user_id": payment_data.get('user_id', ''),
+                    "course_type": payment_data.get('course_type', ''),
+                    "price": payment_data.get('price', 0),
+                    "status": payment_data.get('status', ''),
+                    "payment_date": payment_data.get('timestamp', ''),
+                    "approval_date": payment_data.get('approval_timestamp', '')
+                }
+                admin_data["payments_summary"].append(payment_summary)
+            
+            # Create formatted JSON with proper indentation
+            json_content = json.dumps(admin_data, ensure_ascii=False, indent=2)
+            
+            # Send JSON file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"admin_backup_{timestamp}.json"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(json_content.encode('utf-8')),
+                filename=filename,
+                caption=f"📤 پشتیبان کامل دیتابیس (فرمت ادمین)\n\n"
+                       f"👥 کاربران: {len(data.get('users', {}))}\n"
+                       f"💳 پرداخت‌ها: {len(data.get('payments', {}))}\n"
+                       f"📋 شامل: خلاصه آسان + داده‌های کامل\n"
+                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل پشتیبان کامل ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در صادرات کامل: {str(e)}")
+
+    async def export_telegram_csv(self, query) -> None:
+        """Export Telegram contact information to CSV format"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            users = data.get('users', {})
+            
+            if not users:
+                await query.edit_message_text(
+                    "📭 هیچ کاربری برای صادرات وجود ندارد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]
+                    ])
+                )
+                return
+            
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers for telegram data
+            headers = [
+                'user_id', 'name', 'username', 'phone', 'telegram_link',
+                'course_selected', 'payment_status', 'registration_date'
+            ]
+            writer.writerow(headers)
+            
+            # Write telegram contact data
+            for user_id, user_data in users.items():
+                username = user_data.get('username', '')
+                telegram_link = f"https://t.me/{username}" if username else ''
+                
+                row = [
+                    user_id,
+                    user_data.get('name', ''),
+                    f"@{username}" if username else '',
+                    user_data.get('phone', ''),
+                    telegram_link,
+                    user_data.get('course_selected', ''),
+                    user_data.get('payment_status', ''),
+                    user_data.get('last_updated', '')
+                ]
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send CSV file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"telegram_contacts_{timestamp}.csv"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(csv_content.encode('utf-8')),
+                filename=filename,
+                caption=f"📤 صادرات مخاطبین تلگرام\n\n"
+                       f"👥 تعداد: {len(users)} مخاطب\n"
+                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل CSV مخاطبین تلگرام ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در صادرات مخاطبین: {str(e)}")
+
+    async def generate_users_template(self, query) -> None:
+        """Generate template CSV file for users import"""
+        try:
+            # Create CSV template with sample data
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
+            headers = [
+                'user_id', 'name', 'username', 'course_selected', 'payment_status',
+                'questionnaire_completed', 'registration_date', 'last_interaction'
+            ]
+            writer.writerow(headers)
+            
+            # Add sample rows with Persian examples
+            sample_rows = [
+                ['123456789', 'احمد محمدی', 'ahmad_user', 'in_person_weights', 'approved', 'true', '2024-01-15', '2024-01-20'],
+                ['987654321', 'فاطمه احمدی', 'fateme_user', 'online_cardio', 'pending_approval', 'false', '2024-01-16', '2024-01-18'],
+                ['555666777', 'علی رضایی', 'ali_sports', 'online_combo', 'approved', 'true', '2024-01-17', '2024-01-19']
+            ]
+            
+            for row in sample_rows:
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send template file
+            filename = "template_users_import.csv"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(csv_content.encode('utf-8')),
+                filename=filename,
+                caption="""📋 نمونه فایل واردات کاربران
+
+این فایل شامل:
+✅ ستون‌های ضروری
+✅ نمونه داده‌های صحیح
+✅ فرمت مناسب
+
+نحوه استفاده:
+1️⃣ این فایل را دانلود کنید
+2️⃣ نمونه‌ها را پاک کنید
+3️⃣ اطلاعات واقعی را وارد کنید
+4️⃣ فایل را ذخیره و ارسال کنید"""
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل نمونه کاربران ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در ایجاد نمونه: {str(e)}")
+
+    async def generate_payments_template(self, query) -> None:
+        """Generate template CSV file for payments import"""
+        try:
+            # Create CSV template with sample data
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
+            headers = [
+                'payment_id', 'user_id', 'course_type', 'price', 'status',
+                'payment_date', 'approval_date', 'rejection_reason'
+            ]
+            writer.writerow(headers)
+            
+            # Add sample rows with Persian examples
+            sample_rows = [
+                ['PAY001', '123456789', 'in_person_weights', '3000000', 'approved', '2024-01-15 10:30:00', '2024-01-15 14:20:00', ''],
+                ['PAY002', '987654321', 'online_cardio', '2000000', 'pending_approval', '2024-01-16 09:15:00', '', ''],
+                ['PAY003', '555666777', 'online_combo', '2500000', 'rejected', '2024-01-17 16:45:00', '2024-01-17 18:30:00', 'مدارک ناکافی']
+            ]
+            
+            for row in sample_rows:
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send template file
+            filename = "template_payments_import.csv"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(csv_content.encode('utf-8')),
+                filename=filename,
+                caption="""📋 نمونه فایل واردات پرداخت‌ها
+
+این فایل شامل:
+✅ ستون‌های ضروری
+✅ نمونه داده‌های صحیح
+✅ فرمت تاریخ مناسب
+
+نحوه استفاده:
+1️⃣ این فایل را دانلود کنید
+2️⃣ نمونه‌ها را پاک کنید
+3️⃣ اطلاعات واقعی را وارد کنید
+4️⃣ فایل را ذخیره و ارسال کنید
+
+💡 توجه: قیمت‌ها به ریال وارد شوند"""
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل نمونه پرداخت‌ها ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در ایجاد نمونه: {str(e)}")
+
+    async def show_import_instructions(self, query, data_type: str) -> None:
+        """Show import instructions for different data types"""
+        if data_type == 'users':
+            instructions = """📥 واردات کاربران
+
+📋 فرمت CSV مورد نیاز:
+user_id,name,username,course_selected,payment_status
+123456789,احمد محمدی,ahmad_user,in_person_weights,approved
+987654321,فاطمه احمدی,fateme_user,online_cardio,pending_approval
+
+📌 ستون‌های ضروری:
+• user_id: شناسه عددی کاربر
+• name: نام و نام خانوادگی
+• username: نام کاربری تلگرام (اختیاری)
+• course_selected: نوع دوره انتخابی
+• payment_status: وضعیت پرداخت
+
+🔸 انواع دوره‌ها:
+• in_person_weights
+• in_person_cardio  
+• online_weights
+• online_cardio
+• online_combo
+
+🔸 وضعیت‌های پرداخت:
+• pending_approval
+• approved
+• rejected
+
+📤 برای واردات، فایل CSV را ارسال کنید."""
+            
+        elif data_type == 'payments':
+            instructions = """📥 واردات پرداخت‌ها
+
+📋 فرمت CSV مورد نیاز:
+user_id,course_type,price,status
+123456789,in_person_weights,3000000,approved
+987654321,online_cardio,2000000,pending_approval
+
+📌 ستون‌های ضروری:
+• user_id: شناسه عددی کاربر
+• course_type: نوع دوره
+• price: مبلغ پرداختی (به ریال)
+• status: وضعیت پرداخت
+
+📤 برای واردات، فایل CSV را ارسال کنید."""
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(instructions, reply_markup=reply_markup)
+
+    async def show_coupon_management(self, query) -> None:
+        """Show coupon management menu"""
+        keyboard = [
+            [InlineKeyboardButton("📋 مشاهده کدهای تخفیف", callback_data='admin_view_coupons')],
+            [InlineKeyboardButton("➕ ایجاد کد تخفیف جدید", callback_data='admin_create_coupon')],
+            [InlineKeyboardButton("🔄 فعال/غیرفعال کردن کد", callback_data='admin_toggle_coupon')],
+            [InlineKeyboardButton("🗑️ حذف کد تخفیف", callback_data='admin_delete_coupon')],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_menu')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = """🏷️ مدیریت کدهای تخفیف
+        
+انتخاب کنید:"""
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def show_coupons_list(self, query) -> None:
+        """Show list of all coupons"""
+        coupons = self.coupon_manager.get_all_coupons()
+        
+        if not coupons:
+            text = "❌ هیچ کد تخفیفی تعریف نشده است!"
+        else:
+            text = "🏷️ لیست کدهای تخفیف:\n\n"
+            
+            for code, details in coupons.items():
+                status = "✅ فعال" if details.get('active', False) else "❌ غیرفعال"
+                usage = details.get('usage_count', 0)
+                max_uses = details.get('max_uses', 'نامحدود')
+                expires = details.get('expires_at', 'ندارد')
+                
+                if expires != 'ندارد':
+                    try:
+                        expires_date = datetime.fromisoformat(expires)
+                        expires = expires_date.strftime('%Y/%m/%d')
+                    except:
+                        expires = 'نامعلوم'
+                
+                text += f"🏷️ **{code}**\n"
+                text += f"📊 تخفیف: {details.get('discount_percent', 0)}%\n"
+                text += f"📈 استفاده: {usage}/{max_uses}\n"
+                text += f"📅 انقضا: {expires}\n"
+                text += f"🔘 وضعیت: {status}\n"
+                text += f"📝 توضیحات: {details.get('description', 'ندارد')}\n\n"
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')

@@ -8,6 +8,29 @@ class Config:
     # Bot Configuration
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     ADMIN_ID = int(os.getenv('ADMIN_ID', '0')) if os.getenv('ADMIN_ID', '').isdigit() else None
+    
+    # Multiple Admin Support
+    @classmethod
+    def get_admin_ids(cls):
+        """Get list of admin IDs from environment variables"""
+        admin_ids = []
+        
+        # Add primary admin
+        if cls.ADMIN_ID:
+            admin_ids.append(cls.ADMIN_ID)
+        
+        # Add additional admins from ADMIN_IDS
+        admin_ids_env = os.getenv('ADMIN_IDS', '')
+        if admin_ids_env:
+            for admin_id in admin_ids_env.split(','):
+                admin_id = admin_id.strip()
+                if admin_id.isdigit():
+                    admin_id_int = int(admin_id)
+                    if admin_id_int not in admin_ids:
+                        admin_ids.append(admin_id_int)
+        
+        return admin_ids
+    
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
     
     # Database Configuration
@@ -24,6 +47,28 @@ class Config:
     PAYMENT_CARD_NUMBER = "1234-5678-9012-3456"
     PAYMENT_CARD_HOLDER = "محمد"
     
+    @staticmethod
+    def format_price(price: int) -> str:
+        """Format price in a readable way"""
+        if price >= 1000000:
+            millions = price // 1000000
+            if price % 1000000 == 0:
+                return f"{millions}M تومان"
+            else:
+                remainder = (price % 1000000) // 1000
+                if remainder == 0:
+                    return f"{millions}M تومان"
+                else:
+                    return f"{millions}.{remainder}M تومان"
+        elif price >= 1000:
+            thousands = price // 1000
+            if price % 1000 == 0:
+                return f"{thousands}K تومان"
+            else:
+                return f"{thousands:,} تومان"
+        else:
+            return f"{price:,} تومان"
+    
     # Course Prices (in Tomans)
     PRICES = {
         'in_person_cardio': 3000000,
@@ -31,6 +76,13 @@ class Config:
         'online_weights': 599000,
         'online_cardio': 599000,
         'online_combo': 999000
+    }
+    
+    # Default coupon codes (can be overridden by admin-created ones)
+    DEFAULT_COUPONS = {
+        'WELCOME10': {'discount_percent': 10, 'active': True, 'description': 'خوش‌آمدگویی 10%'},
+        'STUDENT20': {'discount_percent': 20, 'active': True, 'description': 'تخفیف دانشجویی 20%'},
+        'VIP50': {'discount_percent': 50, 'active': False, 'description': 'تخفیف ویژه 50%'}
     }
     
     # Messages

@@ -6,6 +6,9 @@ from datetime import datetime
 
 class QuestionnaireManager:
     def __init__(self, data_file='questionnaire_data.json'):
+        # Ensure we use absolute path to avoid any directory issues
+        if not os.path.isabs(data_file):
+            data_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), data_file)
         self.data_file = data_file
         self.questions = {
             1: {
@@ -152,19 +155,11 @@ class QuestionnaireManager:
             async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as f:
                 content = await f.read()
                 data = json.loads(content)
-                return data.get(str(user_id), {
-                    "current_step": 1,
-                    "answers": {},
-                    "started_at": datetime.now().isoformat(),
-                    "completed": False
-                })
-        except Exception:
-            return {
-                "current_step": 1,
-                "answers": {},
-                "started_at": datetime.now().isoformat(),
-                "completed": False
-            }
+                progress = data.get(str(user_id), None)
+                return progress
+        except Exception as e:
+            print(f"Error loading user progress for {user_id}: {e}")
+            return None
 
     async def save_user_progress(self, user_id: int, progress: Dict[str, Any]):
         """Save user's questionnaire progress"""
@@ -179,6 +174,17 @@ class QuestionnaireManager:
 
         async with aiofiles.open(self.data_file, 'w', encoding='utf-8') as f:
             await f.write(json.dumps(data, ensure_ascii=False, indent=2))
+
+    async def start_questionnaire(self, user_id: int) -> Dict[str, Any]:
+        """Start questionnaire for a user"""
+        progress = {
+            "current_step": 1,
+            "answers": {},
+            "started_at": datetime.now().isoformat(),
+            "completed": False
+        }
+        await self.save_user_progress(user_id, progress)
+        return progress
 
     def get_question(self, step: int, user_answers: Dict = None) -> Optional[Dict]:
         """Get question for specific step"""
@@ -230,6 +236,17 @@ class QuestionnaireManager:
                 return False, f"حداقل {validation['min_length']} کاراکتر وارد کنید"
             if "max_length" in validation and len(answer) > validation["max_length"]:
                 return False, f"حداکثر {validation['max_length']} کاراکتر مجاز است"
+            
+            # Special validation for name field (step 1)
+            if step == 1:
+                # Check if name contains at least one letter
+                import re
+                if not re.search(r'[a-zA-Zآ-ی]', answer):
+                    return False, "نام باید حداقل شامل یک حرف باشد. لطفاً نام و نام خانوادگی خود را به صورت کامل وارد کنید."
+                # Check if it's not just numbers
+                if answer.isdigit():
+                    return False, "نام نمی‌تواند فقط شامل عدد باشد. لطفاً نام و نام خانوادگی خود را وارد کنید."
+            
             return True, ""
 
         elif question["type"] == "phone":
@@ -263,6 +280,13 @@ class QuestionnaireManager:
     async def process_answer(self, user_id: int, answer: str) -> Dict[str, Any]:
         """Process user's answer and return next step info"""
         progress = await self.load_user_progress(user_id)
+        if not progress:
+            return {
+                "status": "error",
+                "message": "شما در حال پاسخ دادن به پرسشنامه نیستید.",
+                "current_step": 0
+            }
+            
         current_step = progress["current_step"]
         
         # Validate answer
@@ -386,7 +410,7 @@ class QuestionnaireManager:
     async def get_current_question(self, user_id: int) -> Optional[Dict]:
         """Get current question for user"""
         progress = await self.load_user_progress(user_id)
-        if progress.get("completed"):
+        if not progress or progress.get("completed"):
             return None
         
         current_step = progress["current_step"]
@@ -481,6 +505,13 @@ class QuestionnaireManager:
     async def process_photo_answer(self, user_id: int, photo_file_id: str) -> Dict[str, Any]:
         """Process photo answer for questionnaire"""
         progress = await self.load_user_progress(user_id)
+        if not progress:
+            return {
+                "status": "error", 
+                "message": "شما در حال پاسخ دادن به پرسشنامه نیستید.",
+                "current_step": 0
+            }
+            
         current_step = progress["current_step"]
         
         # Check if current question is a photo question
@@ -560,6 +591,8 @@ class QuestionnaireManager:
             import asyncio
             loop = asyncio.get_event_loop()
             progress = loop.run_until_complete(self.load_user_progress(user_id))
+            if not progress:
+                return False
             current_step = progress["current_step"]
             question = self.questions.get(current_step)
             return question and question.get("type") == "photo"
@@ -569,4 +602,6 @@ class QuestionnaireManager:
     async def get_user_photos(self, user_id: int) -> Dict[str, list]:
         """Get all user photos from questionnaire"""
         progress = await self.load_user_progress(user_id)
+        if not progress:
+            return {}
         return progress["answers"].get("photos", {})
