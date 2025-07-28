@@ -2035,7 +2035,15 @@ class FootballCoachBot:
 
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors"""
+        import traceback
+        
+        # Log the full traceback
         logger.error(f"Exception while handling an update: {context.error}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        
+        # Print to console for debugging
+        print(f"❌ ERROR: {context.error}")
+        print(f"📋 TRACEBACK:\n{traceback.format_exc()}")
         
         if update and hasattr(update, 'effective_message'):
             try:
