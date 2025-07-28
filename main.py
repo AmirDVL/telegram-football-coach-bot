@@ -348,7 +348,7 @@ class FootballCoachBot:
             # First-time user - show welcome and course selection
             course_keyboard = await self.create_course_selection_keyboard(user_id)
             # Add admin back button to the existing keyboard
-            keyboard = course_keyboard.inline_keyboard + [
+            keyboard = list(course_keyboard.inline_keyboard) + [
                 [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -421,7 +421,7 @@ class FootballCoachBot:
             # Returning user without active course - show course selection
             course_keyboard = await self.create_course_selection_keyboard(user_id)
             # Add additional buttons to the existing keyboard
-            keyboard = course_keyboard.inline_keyboard + [
+            keyboard = list(course_keyboard.inline_keyboard) + [
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
                 [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
             ]
@@ -2015,7 +2015,7 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         course_keyboard = await self.create_course_selection_keyboard(user_id)
         # Add status button to the existing keyboard
-        keyboard = course_keyboard.inline_keyboard + [
+        keyboard = list(course_keyboard.inline_keyboard) + [
             [InlineKeyboardButton("📊 وضعیت فعلی", callback_data='my_status')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
