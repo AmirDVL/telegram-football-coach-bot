@@ -18,6 +18,8 @@ dist/
 # 🧪 TEST AND DEBUG FILES
 test_*.py
 *_test.py
+!test_postgresql_compatibility.py
+# test_postgresql_compatibility.py is needed for testing, so do NOT ignore it
 debug_*.py
 clear_*.py
 fix_*.py
