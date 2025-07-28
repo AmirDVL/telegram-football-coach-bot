@@ -252,8 +252,11 @@ pip install --upgrade pip
 # 4. Install bot dependencies
 pip install -r requirements.txt
 
-# 5. If requirements.txt doesn't exist, install manually:
-pip install python-telegram-bot==21.0.1 aiofiles asyncpg python-dotenv
+# 5. If requirements.txt has version conflicts, install manually:
+# pip install python-telegram-bot==21.0.1 aiofiles python-dotenv asyncpg
+
+# 6. Alternative: Install latest compatible versions
+# pip install python-telegram-bot aiofiles python-dotenv asyncpg Pillow
 ```
 
 #### **Step 6: Configure Environment Variables (SECURE)**
@@ -429,19 +432,19 @@ cd /opt/football-bot
 source venv/bin/activate
 
 # 2. Initialize database tables
-python3 -c "
-import asyncio
-from database_manager import DatabaseManager
+  python3 -c "
+  import asyncio
+  from database_manager import DatabaseManager
 
-async def setup_db():
-    print('Initializing database...')
-    db = DatabaseManager()
-    await db.initialize()
-    print('Database initialized successfully!')
-    await db.close()
+  async def setup_db():
+      print('Initializing database...')
+      db = DatabaseManager()
+      await db.initialize()
+      print('Database initialized successfully!')
+      await db.close()
 
-asyncio.run(setup_db())
-"
+  asyncio.run(setup_db())
+  "
 ```
 
 #### **Step 10: Test Bot Manually**

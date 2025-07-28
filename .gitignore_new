@@ -1,0 +1,99 @@
+# ==============================================================================
+# 🚀 TELEGRAM FOOTBALL COACH BOT - PRODUCTION .GITIGNORE
+# ==============================================================================
+# Only essential files for production deployment are tracked
+# Everything else is excluded for security and clean deployment
+
+# 🔒 SECURITY: Environment and Configuration Files
+.env
+.env.*
+*.env
+
+# 🔒 SECURITY: All Data Files
+*.json
+!.vscode/tasks.json
+
+# 🔒 SECURITY: All SQL Files
+*.sql
+
+# 🔒 SECURITY: Log Files
+*.log
+logs/
+
+# 🔒 SECURITY: Database Files
+*.db
+*.sqlite*
+
+# 🚀 DEPLOYMENT: All Scripts
+*.sh
+*.bat
+*.ps1
+
+# 🧪 DEVELOPMENT: Test and Debug Files
+test_*
+*_test.*
+debug_*
+clear_*
+fix_*
+restore_*
+*_backup.*
+
+# 📚 DOCUMENTATION: All except essential
+*.md
+!README.md
+!DEPLOYMENT_GUIDE.md
+
+# 🛠️ DEVELOPMENT: Non-essential Python modules
+admin_panel.py
+secure_database_manager.py
+security_*.py
+image_processor.py
+coupon_manager.py
+bootstrap.*
+deploy*
+manage.*
+quick_setup.*
+setup_*
+startup.*
+update.*
+
+# Python standard ignores
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+!.vscode/tasks.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ==============================================================================
+# ✅ ALLOWED FILES (only these will be tracked):
+# ==============================================================================
+# Core Python files:
+# - main.py
+# - questionnaire_manager.py  
+# - data_manager.py
+# - database_manager.py
+# - admin_manager.py
+# - config.py
+# 
+# Configuration:
+# - requirements.txt
+# - .env.example
+#
+# Documentation:
+# - README.md
+# - DEPLOYMENT_GUIDE.md
+# ==============================================================================

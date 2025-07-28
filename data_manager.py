@@ -117,7 +117,7 @@ class DataManager:
             from config import Config
             
             # Get admin IDs from config
-            admin_ids = Config.ADMIN_IDS
+            admin_ids = Config.get_admin_ids()
             
             # Read current data
             async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as f:
