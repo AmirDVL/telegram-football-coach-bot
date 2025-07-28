@@ -176,7 +176,7 @@ class FootballCoachBot:
             # Returning user without active course - show course selection
             course_keyboard = await self.create_course_selection_keyboard(user_id)
             # Add status button to the existing keyboard
-            keyboard = course_keyboard.inline_keyboard + [
+            keyboard = list(course_keyboard.inline_keyboard) + [
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
