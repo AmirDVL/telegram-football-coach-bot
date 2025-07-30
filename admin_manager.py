@@ -309,3 +309,51 @@ class AdminManager:
         except Exception as e:
             print(f"Error in full admin sync: {e}")
             return {'added': 0, 'removed': 0}
+
+    async def cleanup_non_env_admins(self, cleaned_by: int) -> Dict[str, int]:
+        """Remove all non-environment admins (manual cleanup for super admins)"""
+        try:
+            admins_data = await self.load_admins()
+            
+            # Track changes
+            removed_count = 0
+            removal_details = []
+            
+            # Get list of admins to remove (non-config, non-super admins)
+            admins_to_remove = []
+            for admin_id in admins_data.get('admins', []):
+                admin_perms = admins_data.get('admin_permissions', {}).get(admin_id, {})
+                
+                # Skip if this is a config admin
+                if admin_perms.get('added_by') == 'config_sync':
+                    continue
+                
+                # Skip super admin for safety (check both in permissions and super_admin field)
+                if (admin_id == str(admins_data.get('super_admin')) or 
+                    admin_perms.get('is_super_admin')):
+                    continue
+                    
+                admins_to_remove.append(admin_id)
+            
+            # Remove the identified admins
+            for admin_id in admins_to_remove:
+                if admin_id in admins_data.get('admins', []):
+                    admins_data['admins'].remove(admin_id)
+                    removal_details.append(admin_id)
+                    removed_count += 1
+                
+                if admin_id in admins_data.get('admin_permissions', {}):
+                    del admins_data['admin_permissions'][admin_id]
+            
+            # Save updated data
+            await self.save_admins(admins_data)
+            
+            return {
+                'removed': removed_count, 
+                'details': removal_details,
+                'total_checked': len(admins_to_remove)
+            }
+            
+        except Exception as e:
+            print(f"Error in cleanup non-env admins: {e}")
+            return {'removed': 0, 'details': [], 'total_checked': 0}

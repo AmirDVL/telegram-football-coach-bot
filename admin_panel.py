@@ -84,6 +84,8 @@ class AdminPanel:
             await self.show_coupons_list(query)
         elif query.data == 'admin_manage_admins':
             await self.show_admin_management(query, user_id)
+        elif query.data == 'admin_cleanup_non_env':
+            await self.handle_cleanup_non_env_admins(query, user_id)
         elif query.data.startswith('admin_add_admin_'):
             await self.handle_add_admin(query, user_id)
         elif query.data.startswith('admin_remove_admin_'):
@@ -156,19 +158,44 @@ class AdminPanel:
             return
         
         admins = await self.admin_manager.get_all_admins()
+        is_super = await self.admin_manager.is_super_admin(user_id)
         
         text = "🔐 مدیریت ادمین‌ها:\n\n"
         
+        env_admins = []
+        manual_admins = []
+        
         for admin in admins:
             admin_type = "🔥 سوپر ادمین" if admin['is_super_admin'] else "👤 ادمین"
-            text += f"{admin_type}: {admin['id']}\n"
+            admin_info = f"{admin_type}: {admin['id']}"
+            
+            # Check if this is an environment admin (different logic for JSON vs DB mode)
+            if (admin.get('added_by') == 'env_sync' or 
+                admin.get('added_by') == 'config_sync' or 
+                admin.get('env_admin') == True):
+                admin_info += " 🌍 (از فایل تنظیمات)"
+                env_admins.append(admin_info)
+            else:
+                admin_info += " 🤝 (اضافه شده دستی)"
+                manual_admins.append(admin_info)
+        
+        for admin_info in env_admins:
+            text += admin_info + "\n"
+        for admin_info in manual_admins:
+            text += admin_info + "\n"
         
         text += "\n💡 برای افزودن ادمین جدید، از دستور زیر استفاده کنید:\n"
         text += "/add_admin [USER_ID]\n\n"
         text += "💡 برای حذف ادمین:\n"
         text += "/remove_admin [USER_ID]"
         
-        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]]
+        keyboard = []
+        
+        # Add cleanup button for super admins if there are manual admins
+        if is_super and manual_admins:
+            keyboard.append([InlineKeyboardButton("🧹 پاک کردن ادمین‌های غیر محیطی", callback_data='admin_cleanup_non_env')])
+        
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(text, reply_markup=reply_markup)
@@ -335,6 +362,110 @@ class AdminPanel:
                 
         except ValueError:
             await update.message.reply_text("❌ ID وارد شده معتبر نیست.")
+    
+    async def handle_cleanup_non_env_admins(self, query, user_id: int) -> None:
+        """Handle cleanup of non-environment admins (super admin only)"""
+        if not await self.admin_manager.is_super_admin(user_id):
+            await query.edit_message_text("❌ فقط سوپر ادمین‌ها می‌توانند این عملیات را انجام دهند.")
+            return
+        
+        try:
+            from config import Config
+            
+            if Config.USE_DATABASE:
+                # Database mode cleanup
+                result = await self.admin_manager.cleanup_non_env_admins(user_id)
+                removed_count = result['removed']
+                removal_details = result['details']
+                total_checked = result['total_checked']
+                
+                if removed_count == 0:
+                    await query.edit_message_text(
+                        "✅ هیچ ادمین غیر محیطی برای حذف یافت نشد.\n\n"
+                        "🔙 بازگشت به منوی ادمین‌ها",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]])
+                    )
+                    return
+                
+                result_text = f"🧹 پاکسازی ادمین‌های غیر محیطی تکمیل شد!\n\n"
+                result_text += f"📊 نتایج:\n"
+                result_text += f"• حذف شده: {removed_count}\n"
+                result_text += f"• کل ادمین‌های بررسی شده: {total_checked}\n\n"
+                
+                if removal_details:
+                    result_text += "ادمین‌های حذف شده:\n"
+                    for detail in removal_details[:10]:  # Show first 10
+                        result_text += f"• {detail}\n"
+                    
+                    if len(removal_details) > 10:
+                        result_text += f"• ... و {len(removal_details) - 10} مورد دیگر\n"
+                
+            else:
+                # JSON mode cleanup
+                admins_data = await self.data_manager.load_data('admins')
+                
+                # Identify non-environment admins
+                non_env_admins = []
+                env_admin_ids = Config.get_admin_ids() or []
+                
+                for admin in admins_data:
+                    admin_id = admin.get('user_id')
+                    
+                    # Skip if this is an environment admin
+                    if (admin.get('added_by') == 'env_sync' or 
+                        admin.get('env_admin') == True or 
+                        admin_id in env_admin_ids):
+                        continue
+                    
+                    # Skip super admins for safety
+                    if admin.get('is_super_admin'):
+                        continue
+                        
+                    non_env_admins.append(admin)
+                
+                if not non_env_admins:
+                    await query.edit_message_text(
+                        "✅ هیچ ادمین غیر محیطی برای حذف یافت نشد.\n\n"
+                        "🔙 بازگشت به منوی ادمین‌ها",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]])
+                    )
+                    return
+                
+                # Remove non-environment admins
+                remaining_admins = [
+                    admin for admin in admins_data 
+                    if admin not in non_env_admins
+                ]
+                
+                await self.data_manager.save_data('admins', remaining_admins)
+                removed_count = len(non_env_admins)
+                
+                result_text = f"🧹 پاکسازی ادمین‌های غیر محیطی تکمیل شد!\n\n"
+                result_text += f"📊 نتایج:\n"
+                result_text += f"• حذف شده: {removed_count}\n"
+                result_text += f"• کل ادمین‌های بررسی شده: {len(non_env_admins)}\n\n"
+                
+                if non_env_admins:
+                    result_text += "ادمین‌های حذف شده:\n"
+                    for admin in non_env_admins[:10]:  # Show first 10
+                        result_text += f"• {admin.get('user_id')}\n"
+                    
+                    if len(non_env_admins) > 10:
+                        result_text += f"• ... و {len(non_env_admins) - 10} مورد دیگر\n"
+            
+            result_text += "\n🌍 ادمین‌های محیطی (از فایل .env) دست نخورده باقی ماندند."
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(result_text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ خطا در پاکسازی ادمین‌ها: {str(e)}\n\n"
+                "🔙 بازگشت به منوی ادمین‌ها",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]])
+            )
     
     async def get_id_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /id command to show user's ID"""

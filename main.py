@@ -41,7 +41,7 @@ class FootballCoachBot:
             print(f"⚠️  Warning: Failed to sync admins: {e}")
     
     async def _sync_admins_json(self):
-        """Sync admins for JSON mode - adds missing and removes outdated admins"""
+        """Sync admins for JSON mode - adds missing environment admins (safe, no auto-removal)"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
@@ -53,7 +53,6 @@ class FootballCoachBot:
         
         # Track changes
         added_count = 0
-        removed_count = 0
         
         # Add any missing admins from environment
         for admin_id in admin_ids:
@@ -72,43 +71,34 @@ class FootballCoachBot:
                         "can_import_data": True,
                         "can_view_analytics": True
                     },
-                    'added_by': admin_id
+                    'added_by': 'env_sync',  # Mark as environment-synced
+                    'env_admin': True  # Flag for easy identification
                 })
                 print(f"  ✅ Added admin to JSON: {admin_id}")
                 added_count += 1
         
-        # Remove admins that are no longer in environment (but keep manually added ones)
-        original_count = len(admins_data)
-        admins_data = [
-            admin for admin in admins_data 
-            if admin.get('user_id') in admin_ids or admin.get('added_by') != admin.get('user_id')
-        ]
-        removed_count = original_count - len(admins_data)
-        
-        if removed_count > 0:
-            print(f"  🗑️ Removed {removed_count} admin(s) no longer in environment")
-        
         # Save updated admins
         await self.data_manager.save_data('admins', admins_data)
-        print(f"🎉 Admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {removed_count} removed.")
+        print(f"🎉 Admin sync completed! {len(admin_ids)} env admins active, {added_count} added. Manual cleanup available via /admin_panel.")
     
     async def _sync_admins_database(self):
-        """Sync admins for database mode - adds missing and removes outdated admins"""
+        """Sync admins for database mode - adds missing environment admins (safe, no auto-removal)"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
         
         print(f"🔄 Syncing {len(admin_ids)} admin(s) to database mode...")
         
-        # Use the full sync method that handles both adding and removing
-        sync_result = await self.admin_panel.admin_manager.sync_config_admins_full(admin_ids)
+        # Only add missing admins - no automatic removal for safety
+        added_count = 0
+        for admin_id in admin_ids:
+            if not await self.admin_panel.admin_manager.is_admin(admin_id):
+                # Use the sync method to add with proper tracking
+                await self.admin_panel.admin_manager.sync_admins_from_config([admin_id])
+                print(f"  ✅ Added admin to database: {admin_id}")
+                added_count += 1
         
-        if sync_result['added'] > 0:
-            print(f"  ✅ Added {sync_result['added']} admin(s) to database")
-        if sync_result['removed'] > 0:
-            print(f"  🗑️ Removed {sync_result['removed']} admin(s) no longer in environment")
-        
-        print(f"🎉 Database admin sync completed! {len(admin_ids)} env admins active, {sync_result['added']} added, {sync_result['removed']} removed.")
+        print(f"🎉 Database admin sync completed! {len(admin_ids)} env admins active, {added_count} added. Manual cleanup available via /admin_panel.")
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start command handler with intelligent status checking"""
