@@ -157,27 +157,80 @@ class AdminPanel:
             await query.edit_message_text("❌ شما دسترسی مدیریت ادمین‌ها را ندارید.")
             return
         
-        admins = await self.admin_manager.get_all_admins()
+        from config import Config
         is_super = await self.admin_manager.is_super_admin(user_id)
+        env_admin_ids = Config.get_admin_ids() or []
         
         text = "🔐 مدیریت ادمین‌ها:\n\n"
         
         env_admins = []
         manual_admins = []
         
-        for admin in admins:
-            admin_type = "🔥 سوپر ادمین" if admin['is_super_admin'] else "👤 ادمین"
-            admin_info = f"{admin_type}: {admin['id']}"
+        if Config.USE_DATABASE:
+            # Database mode - use AdminManager
+            admins = await self.admin_manager.get_all_admins()
             
-            # Check if this is an environment admin (different logic for JSON vs DB mode)
-            if (admin.get('added_by') == 'env_sync' or 
-                admin.get('added_by') == 'config_sync' or 
-                admin.get('env_admin') == True):
-                admin_info += " 🌍 (از فایل تنظیمات)"
-                env_admins.append(admin_info)
+            for admin in admins:
+                admin_type = "🔥 سوپر ادمین" if admin['is_super_admin'] else "👤 ادمین"
+                admin_info = f"{admin_type}: {admin['id']}"
+                
+                # Check if this is an environment admin
+                admin_perms = admin.get('permissions', {})
+                if (admin_perms.get('added_by') == 'config_sync' or 
+                    int(admin['id']) in env_admin_ids):
+                    admin_info += " 🌍 (از فایل تنظیمات)"
+                    env_admins.append(admin_info)
+                else:
+                    admin_info += " 🤝 (اضافه شده دستی)"
+                    manual_admins.append(admin_info)
+        else:
+            # JSON mode - use DataManager
+            admins_data = await self.data_manager.load_data('admins')
+            
+            if isinstance(admins_data, dict):
+                # Convert dict format to list for processing
+                for user_id_str, admin_data in admins_data.items():
+                    admin_id = int(user_id_str)
+                    admin_type = "🔥 سوپر ادمین" if admin_data.get('is_super_admin') else "👤 ادمین"
+                    admin_info = f"{admin_type}: {admin_id}"
+                    
+                    # Check if this is an environment admin
+                    is_env_admin = (
+                        admin_data.get('added_by') == 'env_sync' or 
+                        admin_data.get('env_admin') == True or
+                        admin_data.get('synced_from_config') == True or
+                        admin_data.get('force_synced') == True or
+                        admin_id in env_admin_ids
+                    )
+                    
+                    if is_env_admin:
+                        admin_info += " 🌍 (از فایل تنظیمات)"
+                        env_admins.append(admin_info)
+                    else:
+                        admin_info += " 🤝 (اضافه شده دستی)"
+                        manual_admins.append(admin_info)
             else:
-                admin_info += " 🤝 (اضافه شده دستی)"
-                manual_admins.append(admin_info)
+                # List format
+                for admin in admins_data:
+                    admin_id = admin.get('user_id')
+                    admin_type = "🔥 سوپر ادمین" if admin.get('is_super_admin') else "👤 ادمین"
+                    admin_info = f"{admin_type}: {admin_id}"
+                    
+                    # Check if this is an environment admin
+                    is_env_admin = (
+                        admin.get('added_by') == 'env_sync' or 
+                        admin.get('env_admin') == True or
+                        admin.get('synced_from_config') == True or
+                        admin.get('force_synced') == True or
+                        admin_id in env_admin_ids
+                    )
+                    
+                    if is_env_admin:
+                        admin_info += " 🌍 (از فایل تنظیمات)"
+                        env_admins.append(admin_info)
+                    else:
+                        admin_info += " 🤝 (اضافه شده دستی)"
+                        manual_admins.append(admin_info)
         
         for admin_info in env_admins:
             text += admin_info + "\n"
@@ -408,13 +461,29 @@ class AdminPanel:
                 non_env_admins = []
                 env_admin_ids = Config.get_admin_ids() or []
                 
+                # Convert admins_data dict to list format for processing
+                if isinstance(admins_data, dict):
+                    # Convert from dict format {user_id: admin_data} to list format
+                    admins_list = []
+                    for user_id, admin_data in admins_data.items():
+                        admin_info = admin_data.copy()
+                        admin_info['user_id'] = int(user_id)
+                        admins_list.append(admin_info)
+                    admins_data = admins_list
+                
                 for admin in admins_data:
                     admin_id = admin.get('user_id')
                     
-                    # Skip if this is an environment admin
-                    if (admin.get('added_by') == 'env_sync' or 
-                        admin.get('env_admin') == True or 
-                        admin_id in env_admin_ids):
+                    # Skip if this is an environment admin (check multiple possible flags)
+                    is_env_admin = (
+                        admin.get('added_by') == 'env_sync' or 
+                        admin.get('env_admin') == True or
+                        admin.get('synced_from_config') == True or  # Current JSON format
+                        admin.get('force_synced') == True or       # Current JSON format
+                        admin_id in env_admin_ids                  # Always preserve env IDs
+                    )
+                    
+                    if is_env_admin:
                         continue
                     
                     # Skip super admins for safety
@@ -432,12 +501,25 @@ class AdminPanel:
                     return
                 
                 # Remove non-environment admins
-                remaining_admins = [
-                    admin for admin in admins_data 
-                    if admin not in non_env_admins
-                ]
+                if isinstance(await self.data_manager.load_data('admins'), dict):
+                    # Convert back to dict format for saving
+                    remaining_admins_dict = {}
+                    for admin in admins_data:
+                        if admin not in non_env_admins:
+                            user_id = str(admin.get('user_id'))
+                            admin_copy = admin.copy()
+                            admin_copy.pop('user_id', None)  # Remove user_id from the data since it's the key
+                            remaining_admins_dict[user_id] = admin_copy
+                    
+                    await self.data_manager.save_data('admins', remaining_admins_dict)
+                else:
+                    # List format
+                    remaining_admins = [
+                        admin for admin in admins_data 
+                        if admin not in non_env_admins
+                    ]
+                    await self.data_manager.save_data('admins', remaining_admins)
                 
-                await self.data_manager.save_data('admins', remaining_admins)
                 removed_count = len(non_env_admins)
                 
                 result_text = f"🧹 پاکسازی ادمین‌های غیر محیطی تکمیل شد!\n\n"
