@@ -516,7 +516,7 @@ class FootballCoachBot:
             keyboard = [
                 [InlineKeyboardButton(f"💳 پرداخت و ثبت نام ({price_text})", callback_data=f'payment_{query.data}')],
                 [InlineKeyboardButton("🏷️ کد تخفیف دارم", callback_data=f'coupon_{query.data}')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'back_to_{"online" if query.data.startswith("online") else "in_person"}')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(message_text, reply_markup=reply_markup)
@@ -1787,6 +1787,62 @@ class FootballCoachBot:
         
         await query.edit_message_text(Config.WELCOME_MESSAGE, reply_markup=reply_markup)
 
+    async def back_to_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Return to course selection (online/offline)"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Extract which section to go back to from callback data
+        course_type = query.data.split('_')[-1]  # 'online' or 'in_person'
+        
+        # Simulate the original selection to show the course list
+        # Create a mock update with the course type
+        user_id = update.effective_user.id
+        
+        if course_type == 'online':
+            # Show online courses
+            purchased_courses = await self.get_user_purchased_courses(user_id)
+            
+            weights_text = "1️⃣ برنامه وزنه"
+            cardio_text = "2️⃣ برنامه هوازی و کار با توپ"
+            combo_text = "3️⃣ برنامه وزنه + برنامه هوازی (با تخفیف بیشتر)"
+            
+            if 'online_weights' in purchased_courses:
+                weights_text += " ✅"
+            if 'online_cardio' in purchased_courses:
+                cardio_text += " ✅"
+            if 'online_combo' in purchased_courses:
+                combo_text += " ✅"
+            
+            keyboard = [
+                [InlineKeyboardButton(weights_text, callback_data='online_weights')],
+                [InlineKeyboardButton(cardio_text, callback_data='online_cardio')],
+                [InlineKeyboardButton(combo_text, callback_data='online_combo')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
+            
+        elif course_type == 'in_person':
+            # Show in-person courses
+            purchased_courses = await self.get_user_purchased_courses(user_id)
+            
+            cardio_text = "1️⃣ تمرین هوازی سرعتی چابکی کار با توپ"
+            weights_text = "2️⃣ تمرین وزنه"
+            
+            if 'in_person_cardio' in purchased_courses:
+                cardio_text += " ✅"
+            if 'in_person_weights' in purchased_courses:
+                weights_text += " ✅"
+            
+            keyboard = [
+                [InlineKeyboardButton(cardio_text, callback_data='in_person_cardio')],
+                [InlineKeyboardButton(weights_text, callback_data='in_person_weights')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
+
     async def handle_status_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle status-related callback queries"""
         query = update.callback_query
@@ -2086,6 +2142,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
+    application.add_handler(CallbackQueryHandler(bot.back_to_course_selection, pattern='^back_to_(online|in_person)$'))
     # Admin start menu handlers (must come before generic admin_ handler)
     application.add_handler(CallbackQueryHandler(bot.handle_admin_start_callbacks, pattern='^(admin_panel_main|admin_quick_stats|admin_pending_payments|admin_new_users|admin_manage_admins|admin_user_mode|admin_back_start|admin_payments_detailed|admin_quick_approve|confirm_approve_all)$'))
     # Generic admin handlers (catch remaining admin_ callbacks)
