@@ -336,6 +336,9 @@ class FootballCoachBot:
             user_name = update.effective_user.first_name or "ادمین"
             # Temporarily skip admin check for this call
             await self.show_regular_user_menu(update, user_data, user_name)
+        elif query.data == 'admin_back_start':
+            # Return to admin start menu
+            await self.admin_panel.back_to_admin_start(query, user_id)
 
     async def show_regular_user_menu(self, update: Update, user_data: dict, user_name: str) -> None:
         """Show regular user menu (bypasses admin check)"""
