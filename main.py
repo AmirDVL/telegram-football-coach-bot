@@ -1377,7 +1377,7 @@ class FootballCoachBot:
             
             # Notify user and start questionnaire
             try:
-                await context.bot.send_message(
+                await query.bot.send_message(
                     chat_id=target_user_id,
                     text="✅ پرداخت شما تایید شد! \n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:"
                 )
@@ -1386,7 +1386,7 @@ class FootballCoachBot:
                 await self.questionnaire_manager.start_questionnaire(target_user_id)
                 question = await self.questionnaire_manager.get_current_question(target_user_id)
                 if question:
-                    await self.questionnaire_manager.send_question(context.bot, target_user_id, question)
+                    await self.questionnaire_manager.send_question(query.bot, target_user_id, question)
                 
             except Exception as e:
                 logger.error(f"Failed to notify user {target_user_id}: {e}")
@@ -1421,7 +1421,7 @@ class FootballCoachBot:
             
             # Notify user
             try:
-                await context.bot.send_message(
+                await query.bot.send_message(
                     chat_id=target_user_id,
                     text="❌ متاسفانه پرداخت شما تایید نشد. لطفا با پشتیبانی تماس بگیرید یا فیش صحیح را ارسال کنید."
                 )
