@@ -6,6 +6,13 @@ questionnaire_data.json
 admins.json
 coupons.json
 
+# 🧪 BACKUP SCRIPTS (Keep local only)
+backup_scripts/
+*_backup.py
+force_admin_sync.py
+env_diagnostic.py
+diagnose_env.py
+
 # 🗂️ PYTHON CACHE AND BUILD FILES
 __pycache__/
 *.py[cod]

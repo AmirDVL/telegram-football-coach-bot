@@ -75,6 +75,36 @@ class FootballCoachBot:
         # Save updated admins
         await self.data_manager.save_data('admins', admins_data)
         print(f"🎉 Admin sync completed! {len(admin_ids)} admins are now active.")
+    
+    async def _sync_admins_database(self):
+        """Sync admins for database mode"""
+        admin_ids = Config.get_admin_ids()
+        if not admin_ids:
+            return
+        
+        print(f"🔄 Syncing {len(admin_ids)} admin(s) to database mode...")
+        
+        # Add any missing admins to database
+        for admin_id in admin_ids:
+            if not await self.admin_panel.admin_manager.is_admin(admin_id):
+                await self.admin_panel.admin_manager.add_admin(
+                    admin_id=admin_id,
+                    added_by=admin_id,  # Self-added from environment
+                    permissions={
+                        "can_add_admins": True,
+                        "can_remove_admins": True,
+                        "can_approve_payments": True,
+                        "can_view_users": True,
+                        "can_manage_courses": True,
+                        "can_export_data": True,
+                        "can_import_data": True,
+                        "can_view_analytics": True
+                    },
+                    is_super_admin=True
+                )
+                print(f"  ✅ Added admin to database: {admin_id}")
+        
+        print(f"🎉 Database admin sync completed! {len(admin_ids)} admins are now active.")
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start command handler with intelligent status checking"""
@@ -2124,6 +2154,18 @@ def main():
     # Create bot instance
     bot = FootballCoachBot()
     
+    # Initialize admin sync on startup
+    async def startup_admin_sync():
+        """Sync admins from environment variables on startup"""
+        try:
+            print("🔧 Initializing admin sync from environment variables...")
+            if not Config.USE_DATABASE:
+                await bot._sync_admins_json()
+            else:
+                await bot._sync_admins_database()
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to sync admins on startup: {e}")
+    
     # Create application
     application = Application.builder().token(Config.BOT_TOKEN).build()
     
@@ -2168,8 +2210,9 @@ def main():
         ]
         await app.bot.set_my_commands(commands)
         
-        # Initialize bot (sync admins from config)
+        # Initialize bot and sync admins from environment
         await bot.initialize()
+        await startup_admin_sync()
     
     # Initialize commands on startup
     application.post_init = setup_commands
