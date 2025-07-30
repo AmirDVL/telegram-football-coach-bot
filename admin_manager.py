@@ -233,3 +233,79 @@ class AdminManager:
         except Exception as e:
             print(f"Error syncing admins from config: {e}")
             return False
+
+    async def remove_config_admin(self, admin_id: int) -> bool:
+        """Remove admin that was added from config (bypasses super admin protection)"""
+        try:
+            admins_data = await self.load_admins()
+            
+            # Remove from admins list
+            if str(admin_id) in admins_data.get('admins', []):
+                admins_data['admins'].remove(str(admin_id))
+            
+            # Remove permissions
+            if str(admin_id) in admins_data.get('admin_permissions', {}):
+                del admins_data['admin_permissions'][str(admin_id)]
+            
+            return await self.save_admins(admins_data)
+            
+        except Exception as e:
+            print(f"Error removing config admin {admin_id}: {e}")
+            return False
+
+    async def sync_config_admins_full(self, config_admin_ids: List[int]) -> Dict[str, int]:
+        """Full sync: add missing and remove outdated config admins"""
+        try:
+            admins_data = await self.load_admins()
+            
+            # Track changes
+            added_count = 0
+            removed_count = 0
+            
+            # Add missing admins from config
+            for admin_id in config_admin_ids:
+                if str(admin_id) not in admins_data.get('admins', []):
+                    # Add to admins list
+                    if 'admins' not in admins_data:
+                        admins_data['admins'] = []
+                    admins_data['admins'].append(str(admin_id))
+                    
+                    # Add permissions
+                    if 'admin_permissions' not in admins_data:
+                        admins_data['admin_permissions'] = {}
+                    
+                    admins_data['admin_permissions'][str(admin_id)] = {
+                        'can_add_admins': True,
+                        'can_remove_admins': True,
+                        'can_view_users': True,
+                        'can_manage_payments': True,
+                        'added_by': 'config_sync',
+                        'added_date': datetime.now().isoformat(),
+                        'synced_from_config': True
+                    }
+                    added_count += 1
+            
+            # Remove admins that are no longer in config (only those added by config_sync)
+            admins_to_remove = []
+            for admin_id in admins_data.get('admins', []):
+                admin_perms = admins_data.get('admin_permissions', {}).get(admin_id, {})
+                # Remove if: not in config AND was added by config sync
+                if (int(admin_id) not in config_admin_ids and 
+                    admin_perms.get('added_by') == 'config_sync'):
+                    admins_to_remove.append(admin_id)
+            
+            for admin_id in admins_to_remove:
+                if admin_id in admins_data.get('admins', []):
+                    admins_data['admins'].remove(admin_id)
+                if admin_id in admins_data.get('admin_permissions', {}):
+                    del admins_data['admin_permissions'][admin_id]
+                removed_count += 1
+            
+            # Save updated data
+            await self.save_admins(admins_data)
+            
+            return {'added': added_count, 'removed': removed_count}
+            
+        except Exception as e:
+            print(f"Error in full admin sync: {e}")
+            return {'added': 0, 'removed': 0}
