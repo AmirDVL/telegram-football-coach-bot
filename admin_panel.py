@@ -166,9 +166,18 @@ class AdminPanel:
         env_admins = []
         manual_admins = []
         
-        if Config.USE_DATABASE:
+        # Detect actual mode by checking if database admin data is available
+        try:
+            db_admins = await self.admin_manager.get_all_admins()
+            # If this succeeds and returns data, we're in database mode
+            using_database = len(db_admins) > 0
+        except:
+            # If it fails, we're in JSON mode
+            using_database = False
+        
+        if using_database:
             # Database mode - use AdminManager
-            admins = await self.admin_manager.get_all_admins()
+            admins = db_admins
             
             for admin in admins:
                 admin_type = "🔥 سوپر ادمین" if admin['is_super_admin'] else "👤 ادمین"
@@ -244,8 +253,8 @@ class AdminPanel:
         
         keyboard = []
         
-        # Add cleanup button for super admins if there are manual admins
-        if is_super and manual_admins:
+        # Add cleanup button for super admins (always show for super admins for testing)
+        if is_super:
             keyboard.append([InlineKeyboardButton("🧹 پاک کردن ادمین‌های غیر محیطی", callback_data='admin_cleanup_non_env')])
         
         keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')])

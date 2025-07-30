@@ -54,28 +54,49 @@ class FootballCoachBot:
         # Track changes
         added_count = 0
         
-        # Add any missing admins from environment
-        for admin_id in admin_ids:
-            if not any(admin.get('user_id') == admin_id for admin in admins_data):
-                admins_data.append({
-                    'user_id': admin_id,
-                    'is_super_admin': True,
-                    'is_active': True,
-                    'permissions': {
-                        "can_add_admins": True,
-                        "can_remove_admins": True,
-                        "can_approve_payments": True,
-                        "can_view_users": True,
-                        "can_manage_courses": True,
-                        "can_export_data": True,
-                        "can_import_data": True,
-                        "can_view_analytics": True
-                    },
-                    'added_by': 'env_sync',  # Mark as environment-synced
-                    'env_admin': True  # Flag for easy identification
-                })
-                print(f"  ✅ Added admin to JSON: {admin_id}")
-                added_count += 1
+        # Handle both dict and list formats
+        if isinstance(admins_data, dict):
+            # Dict format: {user_id: admin_data}
+            existing_admin_ids = [int(uid) for uid in admins_data.keys()]
+            
+            for admin_id in admin_ids:
+                if admin_id not in existing_admin_ids:
+                    admins_data[str(admin_id)] = {
+                        'user_id': admin_id,
+                        'is_super_admin': True,
+                        'permissions': 'full',
+                        'added_at': datetime.now().isoformat(),
+                        'added_by': 'env_sync',
+                        'env_admin': True,
+                        'synced_from_config': True
+                    }
+                    print(f"  ✅ Added admin to JSON: {admin_id}")
+                    added_count += 1
+        else:
+            # List format: [{user_id: x, ...}, ...]
+            existing_admin_ids = [admin.get('user_id') for admin in admins_data if admin.get('user_id')]
+            
+            for admin_id in admin_ids:
+                if admin_id not in existing_admin_ids:
+                    admins_data.append({
+                        'user_id': admin_id,
+                        'is_super_admin': True,
+                        'is_active': True,
+                        'permissions': {
+                            "can_add_admins": True,
+                            "can_remove_admins": True,
+                            "can_approve_payments": True,
+                            "can_view_users": True,
+                            "can_manage_courses": True,
+                            "can_export_data": True,
+                            "can_import_data": True,
+                            "can_view_analytics": True
+                        },
+                        'added_by': 'env_sync',
+                        'env_admin': True
+                    })
+                    print(f"  ✅ Added admin to JSON: {admin_id}")
+                    added_count += 1
         
         # Save updated admins
         await self.data_manager.save_data('admins', admins_data)
