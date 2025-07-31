@@ -134,6 +134,17 @@ class AdminManager:
         
         return await self.save_admins(admins_data)
     
+    async def get_all_admin_ids(self) -> List[int]:
+        """Get list of all admin IDs"""
+        try:
+            admins_data = await self.load_admins()
+            admin_list = admins_data.get('admins', [])
+            # Convert to integers and handle both string and int formats
+            return [int(admin_id) for admin_id in admin_list]
+        except Exception as e:
+            print(f"Error getting admin IDs: {e}")
+            return []
+    
     async def get_all_admins(self) -> List[Dict[str, Any]]:
         """Get all admins with their permissions"""
         admins_data = await self.load_admins()
@@ -172,13 +183,70 @@ class AdminManager:
         
         return False
     
-    async def sync_admins_from_config(self):
-        """Sync admins from Config.ADMIN_IDS to admins file"""
+    async def set_super_admin(self, admin_id: int) -> bool:
+        """Set admin as super admin"""
+        try:
+            admins_data = await self.load_admins()
+            
+            # Set as super admin
+            admins_data['super_admin'] = admin_id
+            
+            # Update permissions to super admin level
+            admin_id_str = str(admin_id)
+            if admin_id_str in admins_data.get('admin_permissions', {}):
+                admins_data['admin_permissions'][admin_id_str].update({
+                    'can_add_admins': True,
+                    'can_remove_admins': True,
+                    'can_view_users': True,
+                    'can_manage_payments': True,
+                    'is_super_admin': True,
+                    'updated_date': datetime.now().isoformat()
+                })
+            
+            return await self.save_admins(admins_data)
+        except Exception as e:
+            print(f"Error setting super admin: {e}")
+            return False
+    
+    async def demote_from_super_admin(self, admin_id: int) -> bool:
+        """Demote admin from super admin (but keep as regular admin)"""
+        try:
+            admins_data = await self.load_admins()
+            
+            # Only demote if this admin is currently the super admin
+            if admins_data.get('super_admin') == admin_id:
+                # Find another admin to promote (prefer first in env)
+                from config import Config
+                env_admin_ids = Config.get_admin_ids()
+                new_super_admin = env_admin_ids[0] if env_admin_ids else None
+                
+                admins_data['super_admin'] = new_super_admin
+                
+                # Update this admin's permissions to regular admin level
+                admin_id_str = str(admin_id)
+                if admin_id_str in admins_data.get('admin_permissions', {}):
+                    admins_data['admin_permissions'][admin_id_str].update({
+                        'can_add_admins': False,
+                        'can_remove_admins': False,
+                        'can_view_users': True,
+                        'can_manage_payments': True,
+                        'is_super_admin': False,
+                        'updated_date': datetime.now().isoformat()
+                    })
+            
+            return await self.save_admins(admins_data)
+        except Exception as e:
+            print(f"Error demoting from super admin: {e}")
+            return False
+    
+    async def sync_admins_from_config(self, specific_admin_ids=None):
+        """Comprehensive admin sync from Config.ADMIN_IDS with role detection"""
         try:
             from config import Config
             
             # Get admin IDs from config
-            admin_ids = Config.get_admin_ids()
+            admin_ids = specific_admin_ids or Config.get_admin_ids()
+            config_super_admin = Config.ADMIN_ID
             
             # Load current admins data
             admins_data = await self.load_admins()
@@ -196,12 +264,16 @@ class AdminManager:
             if 'admin_permissions' not in admins_data:
                 admins_data['admin_permissions'] = {}
             
-            # Set first admin as super admin if no super admin exists
-            if not admins_data.get('super_admin') and admin_ids:
-                admins_data['super_admin'] = admin_ids[0]
+            # Set/update super admin from config
+            if config_super_admin and (admins_data.get('super_admin') != config_super_admin):
+                old_super = admins_data.get('super_admin')
+                admins_data['super_admin'] = config_super_admin
+                print(f"🎖️ Super admin updated: {old_super} → {config_super_admin}")
             
             # Add each admin from config
             synced_count = 0
+            updated_count = 0
+            
             for admin_id in admin_ids:
                 if admin_id not in admins_data['admins']:
                     admins_data['admins'].append(admin_id)
@@ -210,24 +282,40 @@ class AdminManager:
                 else:
                     print(f"Admin with ID {admin_id} already exists.")
                 
-                # Ensure admin has permissions entry
+                # Determine if this admin should be super admin
+                is_super = (admin_id == config_super_admin)
+                
+                # Ensure admin has permissions entry with correct role
                 admin_id_str = str(admin_id)
-                if admin_id_str not in admins_data['admin_permissions']:
-                    is_super = (admin_id == admins_data.get('super_admin'))
+                existing_permissions = admins_data['admin_permissions'].get(admin_id_str, {})
+                current_is_super = existing_permissions.get('is_super_admin', False)
+                
+                # Update permissions if role changed or missing
+                if admin_id_str not in admins_data['admin_permissions'] or current_is_super != is_super:
                     admins_data['admin_permissions'][admin_id_str] = {
                         'can_add_admins': is_super,
                         'can_remove_admins': is_super,
                         'can_view_users': True,
                         'can_manage_payments': True,
+                        'is_super_admin': is_super,
                         'added_by': 'config_sync',
-                        'added_date': datetime.now().isoformat(),
+                        'added_date': existing_permissions.get('added_date', datetime.now().isoformat()),
+                        'updated_date': datetime.now().isoformat(),
                         'synced_from_config': True
                     }
+                    if current_is_super != is_super:
+                        role_change = "promoted to super admin" if is_super else "demoted from super admin"
+                        print(f"Admin {admin_id} {role_change}")
+                        updated_count += 1
             
             # Save updated data
             await self.save_admins(admins_data)
             
-            print(f"Admin sync completed. {synced_count} new admins added.")
+            total_changes = synced_count + updated_count
+            if total_changes > 0:
+                print(f"Admin sync completed. {synced_count} new admins added, {updated_count} roles updated.")
+            else:
+                print(f"Admin sync completed. 0 new admins added.")
             return True
             
         except Exception as e:

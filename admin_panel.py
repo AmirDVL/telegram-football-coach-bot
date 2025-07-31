@@ -325,44 +325,47 @@ class AdminPanel:
             await query.edit_message_text(f"❌ خطا: {str(e)}")
     
     async def back_to_admin_main(self, query, user_id: int) -> None:
-        """Return to admin main menu"""
+        """Return to comprehensive admin panel"""
         is_super = await self.admin_manager.is_super_admin(user_id)
         can_manage_admins = await self.admin_manager.can_add_admins(user_id)
         
         keyboard = [
-            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
-            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
-            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("📥 واردات/صادرات داده", callback_data='admin_import_export')]
+            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats'),
+             InlineKeyboardButton("📈 آمار سریع", callback_data='admin_quick_stats')],
+            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users'),
+             InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
+            [InlineKeyboardButton("📥 واردات/صادرات", callback_data='admin_import_export'),
+             InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
         ]
         
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='admin_back_start')])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"سلام {admin_type}!\n\nبه پنل مدیریت خوش آمدید 🎛️"
+        welcome_text = f"🎛️ پنل مدیریت کامل\n\n{admin_type} - همه‌ی ابزارهای مدیریت:"
         
         await query.edit_message_text(welcome_text, reply_markup=reply_markup)
     
     async def back_to_admin_start(self, query, user_id: int) -> None:
-        """Return to admin start menu"""
+        """Return to streamlined admin start menu"""
         is_super = await self.admin_manager.is_super_admin(user_id)
         can_manage_admins = await self.admin_manager.can_add_admins(user_id)
         user_name = query.from_user.first_name or "ادمین"
         
         keyboard = [
-            [InlineKeyboardButton("🎛️ پنل مدیریت", callback_data='admin_panel_main')],
-            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats')],
-            [InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
-            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users')]
+            [InlineKeyboardButton("🎛️ پنل مدیریت کامل", callback_data='admin_panel_main')],
+            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats'),
+             InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
+            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users'),
+             InlineKeyboardButton("� حالت کاربر", callback_data='admin_user_mode')]
         ]
         
         if can_manage_admins:
-            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        keyboard.append([InlineKeyboardButton("👤 حالت کاربر عادی", callback_data='admin_user_mode')])
+            keyboard.append([InlineKeyboardButton("� مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -584,7 +587,7 @@ class AdminPanel:
         await update.message.reply_text(text, parse_mode='Markdown')
 
     async def admin_menu_callback(self, query) -> None:
-        """Admin menu accessible via callback (from admin start menu)"""
+        """Comprehensive admin panel accessible via callback"""
         user_id = query.from_user.id
         
         if not await self.admin_manager.is_admin(user_id):
@@ -595,20 +598,23 @@ class AdminPanel:
         can_manage_admins = await self.admin_manager.can_add_admins(user_id)
         
         keyboard = [
-            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
-            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
-            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')]
+            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats'),
+             InlineKeyboardButton("📈 آمار سریع", callback_data='admin_quick_stats')],
+            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users'),
+             InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
+            [InlineKeyboardButton("📥 واردات/صادرات", callback_data='admin_import_export'),
+             InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
         ]
         
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
-        keyboard.append([InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='admin_back_start')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"🎛️ پنل مدیریت کامل\n\n{admin_type} - انتخاب کنید:"
+        welcome_text = f"🎛️ پنل مدیریت کامل\n\n{admin_type} - همه‌ی ابزارهای مدیریت:"
         
         await query.edit_message_text(welcome_text, reply_markup=reply_markup)
     

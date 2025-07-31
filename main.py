@@ -33,26 +33,75 @@ class FootballCoachBot:
         self.user_coupon_codes = {}  # Store coupon codes entered by users
     
     async def initialize(self):
-        """Initialize bot on startup - sync admins from config"""
+        """Initialize bot on startup - comprehensive admin sync"""
         try:
-            # Always sync admins through admin_manager regardless of storage type
-            await self.admin_panel.admin_manager.sync_admins_from_config()
+            print("🔧 Initializing admin sync from environment variables...")
+            
+            # Check if using database mode
+            if Config.USE_DATABASE:
+                await self._sync_admins_database()
+            else:
+                await self._sync_admins_json()
         except Exception as e:
             print(f"⚠️  Warning: Failed to sync admins: {e}")
     
+    async def notify_all_admins_payment_update(self, bot, payment_user_id: int, action: str, acting_admin_name: str, course_title: str = "", price: int = 0, user_name: str = ""):
+        """Notify all admins when a payment status changes"""
+        try:
+            # Get all admin IDs
+            admin_ids = []
+            if Config.USE_DATABASE:
+                admin_ids = await self.admin_panel.admin_manager.get_all_admin_ids()
+            else:
+                admins_data = await self.data_manager.load_data('admins')
+                admin_ids = [int(admin_id) for admin_id in admins_data.keys()] if admins_data else []
+            
+            # Create message based on action
+            if action == 'approve':
+                message = f"""✅ پرداخت تایید شد:
+👤 کاربر: {user_name or 'ناشناس'}
+🆔 User ID: {payment_user_id}
+📚 دوره: {course_title}
+💰 مبلغ: {Config.format_price(price)}
+⏰ تایید شده توسط: {acting_admin_name}"""
+            elif action == 'reject':
+                message = f"""❌ پرداخت رد شد:
+👤 کاربر: {user_name or 'ناشناس'}
+🆔 User ID: {payment_user_id}
+⏰ رد شده توسط: {acting_admin_name}"""
+            else:
+                return
+            
+            # Send notification to all admins
+            for admin_id in admin_ids:
+                try:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=f"🔔 به‌روزرسانی وضعیت پرداخت:\n\n{message}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to notify admin {admin_id}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to notify admins about payment update: {e}")
+    
     async def _sync_admins_json(self):
-        """Sync admins for JSON mode - adds missing environment admins (safe, no auto-removal)"""
+        """Comprehensive admin sync for JSON mode - detects and applies all changes"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
         
         print(f"🔄 Syncing {len(admin_ids)} admin(s) to JSON mode...")
         
+        # Get current super admin from config (ADMIN_ID)
+        config_super_admin = Config.ADMIN_ID
+        
         # Load existing admins
         admins_data = await self.data_manager.load_data('admins')
         
         # Track changes
         added_count = 0
+        updated_count = 0
         
         # Handle both dict and list formats
         if isinstance(admins_data, dict):
@@ -60,10 +109,13 @@ class FootballCoachBot:
             existing_admin_ids = [int(uid) for uid in admins_data.keys()]
             
             for admin_id in admin_ids:
+                is_super = (admin_id == config_super_admin)
+                
                 if admin_id not in existing_admin_ids:
+                    # Add new admin
                     admins_data[str(admin_id)] = {
                         'user_id': admin_id,
-                        'is_super_admin': True,
+                        'is_super_admin': is_super,
                         'permissions': 'full',
                         'added_at': datetime.now().isoformat(),
                         'added_by': 'env_sync',
@@ -72,19 +124,31 @@ class FootballCoachBot:
                     }
                     print(f"  ✅ Added admin to JSON: {admin_id}")
                     added_count += 1
+                else:
+                    # Update existing admin's super admin status if changed
+                    current_is_super = admins_data[str(admin_id)].get('is_super_admin', False)
+                    if current_is_super != is_super:
+                        admins_data[str(admin_id)]['is_super_admin'] = is_super
+                        admins_data[str(admin_id)]['updated_at'] = datetime.now().isoformat()
+                        role_change = "promoted to super admin" if is_super else "demoted from super admin"
+                        print(f"  🎖️ Admin {admin_id} {role_change}")
+                        updated_count += 1
         else:
             # List format: [{user_id: x, ...}, ...]
             existing_admin_ids = [admin.get('user_id') for admin in admins_data if admin.get('user_id')]
             
             for admin_id in admin_ids:
+                is_super = (admin_id == config_super_admin)
+                
                 if admin_id not in existing_admin_ids:
+                    # Add new admin
                     admins_data.append({
                         'user_id': admin_id,
-                        'is_super_admin': True,
+                        'is_super_admin': is_super,
                         'is_active': True,
                         'permissions': {
-                            "can_add_admins": True,
-                            "can_remove_admins": True,
+                            "can_add_admins": is_super,
+                            "can_remove_admins": is_super,
                             "can_approve_payments": True,
                             "can_view_users": True,
                             "can_manage_courses": True,
@@ -97,29 +161,73 @@ class FootballCoachBot:
                     })
                     print(f"  ✅ Added admin to JSON: {admin_id}")
                     added_count += 1
+                else:
+                    # Update existing admin's super admin status if changed
+                    for admin in admins_data:
+                        if admin.get('user_id') == admin_id:
+                            current_is_super = admin.get('is_super_admin', False)
+                            if current_is_super != is_super:
+                                admin['is_super_admin'] = is_super
+                                admin['updated_at'] = datetime.now().isoformat()
+                                # Update permissions based on super admin status
+                                if 'permissions' in admin and isinstance(admin['permissions'], dict):
+                                    admin['permissions']['can_add_admins'] = is_super
+                                    admin['permissions']['can_remove_admins'] = is_super
+                                role_change = "promoted to super admin" if is_super else "demoted from super admin"
+                                print(f"  🎖️ Admin {admin_id} {role_change}")
+                                updated_count += 1
+                            break
         
         # Save updated admins
         await self.data_manager.save_data('admins', admins_data)
-        print(f"🎉 Admin sync completed! {len(admin_ids)} env admins active, {added_count} added. Manual cleanup available via /admin_panel.")
+        total_changes = added_count + updated_count
+        print(f"🎉 JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated. Manual cleanup available via /admin_panel.")
     
     async def _sync_admins_database(self):
-        """Sync admins for database mode - adds missing environment admins (safe, no auto-removal)"""
+        """Comprehensive admin sync for database mode using admin_manager"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
         
         print(f"🔄 Syncing {len(admin_ids)} admin(s) to database mode...")
         
-        # Only add missing admins - no automatic removal for safety
-        added_count = 0
-        for admin_id in admin_ids:
-            if not await self.admin_panel.admin_manager.is_admin(admin_id):
-                # Use the sync method to add with proper tracking
-                await self.admin_panel.admin_manager.sync_admins_from_config([admin_id])
-                print(f"  ✅ Added admin to database: {admin_id}")
-                added_count += 1
+        # Use the comprehensive sync method from admin_manager
+        success = await self.admin_panel.admin_manager.sync_admins_from_config()
         
-        print(f"🎉 Database admin sync completed! {len(admin_ids)} env admins active, {added_count} added. Manual cleanup available via /admin_panel.")
+        if success:
+            print(f"🎉 Database admin sync completed! Manual cleanup available via /admin_panel.")
+        else:
+            print(f"⚠️ Database admin sync encountered issues.")
+    
+    async def notify_all_admins(self, context, message, reply_markup=None, photo=None):
+        """Send notification to all admins"""
+        admin_ids = Config.get_admin_ids()
+        if not admin_ids:
+            return 0
+        
+        sent_count = 0
+        for admin_id in admin_ids:
+            try:
+                if photo:
+                    await context.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=photo,
+                        caption=message,
+                        reply_markup=reply_markup
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=message,
+                        reply_markup=reply_markup,
+                        parse_mode='HTML'
+                    )
+                sent_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to send notification to admin {admin_id}: {e}")
+        
+        logger.info(f"Notification sent to {sent_count}/{len(admin_ids)} admins")
+        return sent_count
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start command handler with intelligent status checking"""
@@ -140,15 +248,16 @@ class FootballCoachBot:
         # Check user status and show appropriate menu
         await self.show_status_based_menu(update, user_data, user_name)
     
-    async def show_status_based_menu(self, update: Update, user_data: dict, user_name: str) -> None:
+    async def show_status_based_menu(self, update: Update, user_data: dict, user_name: str, admin_mode: bool = False) -> None:
         """Show menu based on user's current status"""
         user_id = update.effective_user.id
         
-        # Check if user is admin first
-        is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
-        if is_admin:
-            await self.show_admin_start_menu(update, user_name, user_id)
-            return
+        # Check if user is admin first (but skip if in admin_mode)
+        if not admin_mode:
+            is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
+            if is_admin:
+                await self.show_admin_start_menu(update, user_name, user_id)
+                return
         
         # Determine user status
         status = await self.get_user_status(user_data)
@@ -160,19 +269,23 @@ class FootballCoachBot:
             
         elif status == 'payment_pending':
             # User has submitted payment, waiting for approval
-            course_name = user_data.get('course_selected', 'نامشخص')
+            course_code = user_data.get('course_selected', 'نامشخص')
+            course_name = self.get_course_name_farsi(course_code)
             keyboard = [
                 [InlineKeyboardButton("📊 وضعیت پرداخت", callback_data='check_payment_status')],
                 [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
                 [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')]
             ]
+            if admin_mode:
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
             reply_markup = InlineKeyboardMarkup(keyboard)
             welcome_text = f"سلام {user_name}! 👋\n\n⏳ پرداخت شما برای دوره **{course_name}** در انتظار تایید است.\n\nمی‌توانید وضعیت پرداخت خود را بررسی کنید:"
             
         elif status == 'payment_approved':
             # User payment approved, questionnaire pending or in progress
             questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
-            course_name = user_data.get('course', 'نامشخص')
+            course_code = user_data.get('course', 'نامشخص')
+            course_name = self.get_course_name_farsi(course_code)
             
             if questionnaire_status.get('completed', False):
                 # Questionnaire completed, show comprehensive program access menu
@@ -188,6 +301,9 @@ class FootballCoachBot:
                     [InlineKeyboardButton("🛒 دوره جدید", callback_data='new_course')]
                 ]
                 
+                if admin_mode:
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
+                
                 # Enhanced welcome message showing completion status and purchased courses
                 if course_count > 1:
                     welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
@@ -202,18 +318,23 @@ class FootballCoachBot:
                     [InlineKeyboardButton("🔄 شروع مجدد پرسشنامه", callback_data='restart_questionnaire')],
                     [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')]
                 ]
+                if admin_mode:
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
                 welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
         elif status == 'payment_rejected':
             # Payment was rejected
-            course_name = user_data.get('course_selected', 'نامشخص')
+            course_code = user_data.get('course_selected', 'نامشخص')
+            course_name = self.get_course_name_farsi(course_code)
             keyboard = [
                 [InlineKeyboardButton("💳 پرداخت مجدد", callback_data=f'pay_{user_data.get("course_selected", "")}')],
                 [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
                 [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')]
             ]
+            if admin_mode:
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
             reply_markup = InlineKeyboardMarkup(keyboard)
             welcome_text = f"سلام {user_name}! 👋\n\n❌ متاسفانه پرداخت شما برای دوره **{course_name}** تایید نشد.\n\nمی‌توانید مجدداً پرداخت کنید یا با پشتیبانی تماس بگیرید:"
             
@@ -221,9 +342,13 @@ class FootballCoachBot:
             # Returning user without active course - show course selection
             course_keyboard = await self.create_course_selection_keyboard(user_id)
             # Add status button to the existing keyboard
-            keyboard = list(course_keyboard.inline_keyboard) + [
+            additional_buttons = [
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')]
             ]
+            if admin_mode:
+                additional_buttons.append([InlineKeyboardButton("� بازگشت به منوی ادمین", callback_data='admin_back_start')])
+            
+            keyboard = list(course_keyboard.inline_keyboard) + additional_buttons
             reply_markup = InlineKeyboardMarkup(keyboard)
             welcome_text = f"سلام {user_name}! 👋\n\nخوش برگشتی! چه کاری می‌تونم برات انجام بدم؟"
         
@@ -296,7 +421,8 @@ class FootballCoachBot:
         if user_id is None:
             keyboard = [
                 [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')]
+                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')],
+                [InlineKeyboardButton("🥗 برنامه غذایی", callback_data='nutrition_plan')]
             ]
         else:
             # Get purchased courses to add tick marks
@@ -315,29 +441,28 @@ class FootballCoachBot:
             
             keyboard = [
                 [InlineKeyboardButton(in_person_text, callback_data='in_person')],
-                [InlineKeyboardButton(online_text, callback_data='online')]
+                [InlineKeyboardButton(online_text, callback_data='online')],
+                [InlineKeyboardButton("🥗 برنامه غذایی", callback_data='nutrition_plan')]
             ]
         
         return InlineKeyboardMarkup(keyboard)
 
     async def show_admin_start_menu(self, update: Update, user_name: str, user_id: int) -> None:
-        """Show special start menu for admins"""
+        """Show streamlined start menu for admins"""
         is_super = await self.admin_panel.admin_manager.is_super_admin(user_id)
         can_manage_admins = await self.admin_panel.admin_manager.can_add_admins(user_id)
         
         keyboard = [
-            [InlineKeyboardButton("🎛️ پنل مدیریت", callback_data='admin_panel_main')],
-            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats')],
-            [InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
-            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users')]
+            [InlineKeyboardButton("🎛️ پنل مدیریت کامل", callback_data='admin_panel_main')],
+            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats'),
+             InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
+            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users'),
+             InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')]
         ]
         
         # Add admin management for those with permission
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        # Add user mode option
-        keyboard.append([InlineKeyboardButton("👤 حالت کاربر عادی", callback_data='admin_user_mode')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -379,107 +504,13 @@ class FootballCoachBot:
             # Show regular user interface
             user_data = await self.data_manager.get_user_data(user_id)
             user_name = update.effective_user.first_name or "ادمین"
-            # Temporarily skip admin check for this call
-            await self.show_regular_user_menu(update, user_data, user_name)
+            # Use the consolidated function with admin_mode=True
+            await self.show_status_based_menu(update, user_data, user_name, admin_mode=True)
         elif query.data == 'admin_back_start':
             # Return to admin start menu
             await self.admin_panel.back_to_admin_start(query, user_id)
 
-    async def show_regular_user_menu(self, update: Update, user_data: dict, user_name: str) -> None:
-        """Show regular user menu (bypasses admin check)"""
-        user_id = update.effective_user.id
-        
-        # Determine user status
-        status = await self.get_user_status(user_data)
-        
-        if status == 'new_user':
-            # First-time user - show welcome and course selection
-            course_keyboard = await self.create_course_selection_keyboard(user_id)
-            # Add admin back button to the existing keyboard
-            keyboard = list(course_keyboard.inline_keyboard) + [
-                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            welcome_text = f"سلام {user_name}! 👋\n\n" + Config.WELCOME_MESSAGE
-            
-        elif status == 'payment_pending':
-            # User has submitted payment, waiting for approval
-            course_name = user_data.get('course_selected', 'نامشخص')
-            keyboard = [
-                [InlineKeyboardButton("📊 وضعیت پرداخت", callback_data='check_payment_status')],
-                [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
-                [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')],
-                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            welcome_text = f"سلام {user_name}! 👋\n\n⏳ پرداخت شما برای دوره **{course_name}** در انتظار تایید است.\n\nمی‌توانید وضعیت پرداخت خود را بررسی کنید:"
-            
-        elif status == 'payment_approved':
-            # User payment approved, questionnaire pending or in progress
-            questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
-            course_name = user_data.get('course', 'نامشخص')
-            
-            if questionnaire_status.get('completed', False):
-                # Questionnaire completed, show comprehensive program access menu
-                # Get purchased courses for better context  
-                purchased_courses = await self.get_user_purchased_courses(user_id)
-                course_count = len(purchased_courses)
-                
-                keyboard = [
-                    [InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')],
-                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                    [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
-                    [InlineKeyboardButton("🔄 بروزرسانی پرسشنامه", callback_data='restart_questionnaire')],
-                    [InlineKeyboardButton("🛒 دوره جدید", callback_data='new_course')],
-                    [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
-                ]
-                
-                # Enhanced welcome message showing completion status and purchased courses
-                if course_count > 1:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
-                else:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
-            else:
-                # Questionnaire not completed
-                current_step = questionnaire_status.get('current_step', 1)
-                total_steps = questionnaire_status.get('total_steps', 17)
-                keyboard = [
-                    [InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')],
-                    [InlineKeyboardButton("🔄 شروع مجدد پرسشنامه", callback_data='restart_questionnaire')],
-                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                    [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
-                ]
-                welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-        elif status == 'payment_rejected':
-            # Payment was rejected
-            course_name = user_data.get('course_selected', 'نامشخص')
-            keyboard = [
-                [InlineKeyboardButton("💳 پرداخت مجدد", callback_data=f'pay_{user_data.get("course_selected", "")}')],
-                [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
-                [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')],
-                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            welcome_text = f"سلام {user_name}! 👋\n\n❌ متاسفانه پرداخت شما برای دوره **{course_name}** تایید نشد.\n\nمی‌توانید مجدداً پرداخت کنید یا با پشتیبانی تماس بگیرید:"
-            
-        else:
-            # Returning user without active course - show course selection
-            course_keyboard = await self.create_course_selection_keyboard(user_id)
-            # Add additional buttons to the existing keyboard
-            keyboard = list(course_keyboard.inline_keyboard) + [
-                [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            welcome_text = f"سلام {user_name}! 👋\n\nخوش برگشتی! چه کاری می‌تونم برات انجام بدم؟"
-        
-        if hasattr(update, 'callback_query') and update.callback_query:
-            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+
 
     async def handle_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle main menu selections"""
@@ -532,6 +563,29 @@ class FootballCoachBot:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
+            
+        elif query.data == 'nutrition_plan':
+            # Handle nutrition plan selection
+            nutrition_message = """🥗 برنامه غذایی شخصی‌سازی شده
+
+با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده تهیه می‌شود.
+
+برای دریافت برنامه غذایی، لطفاً روی لینک زیر کلیک کنید:
+
+👈 https://fitava.ir/coach/drbohloul/question
+
+✨ این برنامه شامل:
+• برنامه غذایی کامل بر اساس نیازهای شما
+• راهنمایی تخصصی تغذیه ورزشی
+• پیگیری و تنظیم برنامه
+
+🔙 برای بازگشت به منوی اصلی، دکمه زیر را فشار دهید."""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(nutrition_message, reply_markup=reply_markup)
 
     async def handle_course_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle detailed course information"""
@@ -1144,8 +1198,9 @@ class FootballCoachBot:
             course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
             price = Config.PRICES.get(course_type, 0)
             
-            # Notify admin for approval
-            if Config.ADMIN_ID:
+            # Notify ALL admins for approval
+            admin_ids = Config.get_admin_ids()
+            if admin_ids:
                 admin_message = (f"🔔 درخواست تایید پرداخت جدید\n\n"
                                f"👤 کاربر: {update.effective_user.first_name}\n"
                                f"📱 نام کاربری: @{update.effective_user.username or 'ندارد'}\n"
@@ -1160,17 +1215,25 @@ class FootballCoachBot:
                         InlineKeyboardButton("✅ تایید", callback_data=f'approve_payment_{user_id}'),
                         InlineKeyboardButton("❌ رد", callback_data=f'reject_payment_{user_id}')
                     ],
-                    [InlineKeyboardButton(" مدیریت پرداخت‌ها", callback_data='admin_pending_payments')]
+                    [InlineKeyboardButton("🎛️ مدیریت پرداخت‌ها", callback_data='admin_pending_payments')]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                # Send photo with caption and approval buttons combined
-                await context.bot.send_photo(
-                    chat_id=Config.ADMIN_ID,
-                    photo=photo.file_id,
-                    caption=admin_message,
-                    reply_markup=reply_markup
-                )
+                # Send to ALL admins
+                sent_count = 0
+                for admin_id in admin_ids:
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=admin_id,
+                            photo=photo.file_id,
+                            caption=admin_message,
+                            reply_markup=reply_markup
+                        )
+                        sent_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to send payment notification to admin {admin_id}: {e}")
+                
+                logger.info(f"Payment notification sent to {sent_count}/{len(admin_ids)} admins")
                 
         except Exception as e:
             logger.error(f"Error processing payment receipt: {e}")
@@ -1392,19 +1455,39 @@ class FootballCoachBot:
             
             # Notify user and start questionnaire
             try:
+                # First, notify the user about approval
                 await query.bot.send_message(
                     chat_id=target_user_id,
                     text="✅ پرداخت شما تایید شد! \n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:"
                 )
                 
-                # Start the questionnaire
+                # Then, start the questionnaire
+                logger.info(f"Starting questionnaire for user {target_user_id}")
                 await self.questionnaire_manager.start_questionnaire(target_user_id)
+                
+                # Get and send the first question
                 question = await self.questionnaire_manager.get_current_question(target_user_id)
                 if question:
                     await self.questionnaire_manager.send_question(query.bot, target_user_id, question)
+                    logger.info(f"Successfully started questionnaire for user {target_user_id}")
+                else:
+                    logger.error(f"Failed to get first question for user {target_user_id}")
+                    # Send fallback message
+                    await query.bot.send_message(
+                        chat_id=target_user_id,
+                        text="✅ پرداخت تایید شد! برای ادامه از دستور /start استفاده کنید."
+                    )
                 
             except Exception as e:
-                logger.error(f"Failed to notify user {target_user_id}: {e}")
+                logger.error(f"Failed to notify/start questionnaire for user {target_user_id}: {e}")
+                # Try to at least notify them of approval
+                try:
+                    await query.bot.send_message(
+                        chat_id=target_user_id,
+                        text="✅ پرداخت شما تایید شد! برای ادامه از دستور /start استفاده کنید."
+                    )
+                except Exception as e2:
+                    logger.error(f"Failed to send even basic approval message to user {target_user_id}: {e2}")
             
             # Update admin message
             course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص') if course_type else 'نامشخص'
@@ -1423,6 +1506,17 @@ class FootballCoachBot:
             except Exception:
                 # Fallback to edit_message_text if it's not a photo message
                 await query.edit_message_text(updated_message)
+            
+            # Notify all admins about the approval
+            await self.notify_all_admins_payment_update(
+                bot=context.bot,
+                payment_user_id=target_user_id,
+                action='approve',
+                acting_admin_name=update.effective_user.first_name or "ادمین",
+                course_title=course_title,
+                price=price,
+                user_name=user_data.get('name', 'ناشناس')
+            )
             
         elif action == 'reject':
             # Reject payment
@@ -1455,6 +1549,15 @@ class FootballCoachBot:
             except Exception:
                 # Fallback to edit_message_text if it's not a photo message
                 await query.edit_message_text(updated_message)
+            
+            # Notify all admins about the rejection
+            await self.notify_all_admins_payment_update(
+                bot=context.bot,
+                payment_user_id=target_user_id,
+                action='reject',
+                acting_admin_name=update.effective_user.first_name or "ادمین",
+                user_name=user_data.get('name', 'ناشناس')
+            )
 
     async def show_user_profile(self, query, target_user_id: int) -> None:
         """Show detailed user profile for admin review"""
@@ -1480,7 +1583,7 @@ class FootballCoachBot:
 🆔 شناسه: {target_user_id}
 📱 نام تلگرام: {telegram_name}
 🔗 نام کاربری: {username}
-📚 دوره انتخابی: {user_data.get('course_selected', 'انتخاب نشده')}
+📚 دوره انتخابی: {self.get_course_name_farsi(user_data.get('course_selected', 'انتخاب نشده'))}
 💳 وضعیت پرداخت: {self.get_payment_status_text(user_data.get('payment_status'))}
 📋 وضعیت پرسشنامه: {self.get_questionnaire_status_text(user_data)}
 📅 تاریخ ثبت نام: {user_data.get('registration_date', 'نامشخص')}
@@ -1824,11 +1927,8 @@ class FootballCoachBot:
         query = update.callback_query
         await query.answer()
         
-        keyboard = [
-            [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-            [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        user_id = update.effective_user.id
+        reply_markup = await self.create_course_selection_keyboard(user_id)
         
         await query.edit_message_text(Config.WELCOME_MESSAGE, reply_markup=reply_markup)
 
@@ -1838,7 +1938,7 @@ class FootballCoachBot:
         await query.answer()
         
         # Extract which section to go back to from callback data
-        course_type = query.data.split('_')[-1]  # 'online' or 'in_person'
+        course_type = query.data.replace('back_to_', '')  # 'online' or 'in_person'
         
         # Simulate the original selection to show the course list
         # Create a mock update with the course type
@@ -1928,7 +2028,8 @@ class FootballCoachBot:
         # Get current status
         status = await self.get_user_status(user_data)
         payment_status = user_data.get('payment_status', 'none')
-        course_name = user_data.get('course', user_data.get('course_selected', 'انتخاب نشده'))
+        course_code = user_data.get('course', user_data.get('course_selected', 'انتخاب نشده'))
+        course_name = self.get_course_name_farsi(course_code)
         
         # Get questionnaire status if relevant
         questionnaire_status = ""
@@ -1976,7 +2077,8 @@ class FootballCoachBot:
     async def show_payment_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show detailed payment status"""
         payment_status = user_data.get('payment_status', 'none')
-        course_name = user_data.get('course_selected', 'نامشخص')
+        course_code = user_data.get('course_selected', 'نامشخص')
+        course_name = self.get_course_name_farsi(course_code)
         
         if payment_status == 'pending_approval':
             message = f"""⏳ **وضعیت پرداخت**
@@ -2050,7 +2152,8 @@ class FootballCoachBot:
 
     async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show user's training program"""
-        course_name = user_data.get('course', 'نامشخص')
+        course_code = user_data.get('course', 'نامشخص')
+        course_name = self.get_course_name_farsi(course_code)
         
         # This would typically fetch from a database or generate based on questionnaire answers
         message = f"""📋 **برنامه تمرینی شما**
@@ -2137,6 +2240,21 @@ class FootballCoachBot:
         }
         return status_map.get(status, '❓ نامشخص')
 
+    def get_course_name_farsi(self, course_code: str) -> str:
+        """Convert course code to Persian course name"""
+        course_map = {
+            'in_person': 'دوره تمرین حضوری',
+            'online': 'دوره تمرین آنلاین',
+            'in_person_cardio': 'حضوری - تمرین هوازی سرعتی چابکی',
+            'in_person_weights': 'حضوری - تمرین وزنه',
+            'online_cardio': 'آنلاین - برنامه هوازی و کار با توپ',
+            'online_weights': 'آنلاین - برنامه وزنه',
+            'online_combo': 'آنلاین - برنامه ترکیبی (وزنه + هوازی)',
+            'in_person_nutrition': 'حضوری - برنامه تغذیه',
+            'online_nutrition': 'آنلاین - برنامه تغذیه'
+        }
+        return course_map.get(course_code, course_code if course_code else 'انتخاب نشده')
+
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors"""
         import traceback
@@ -2169,21 +2287,9 @@ def main():
     # Create bot instance
     bot = FootballCoachBot()
     
-    # Initialize admin sync on startup
-    async def startup_admin_sync():
-        """Sync admins from environment variables on startup"""
-        try:
-            print("🔧 Initializing admin sync from environment variables...")
-            if not Config.USE_DATABASE:
-                await bot._sync_admins_json()
-            else:
-                await bot._sync_admins_database()
-        except Exception as e:
-            print(f"⚠️  Warning: Failed to sync admins on startup: {e}")
-    
     # Create application
     application = Application.builder().token(Config.BOT_TOKEN).build()
-    
+
     # Add handlers
     application.add_handler(CommandHandler("start", bot.start))
     # Hidden admin command - works but not shown in menu
@@ -2191,7 +2297,7 @@ def main():
     application.add_handler(CommandHandler("add_admin", bot.admin_panel.add_admin_command))
     application.add_handler(CommandHandler("remove_admin", bot.admin_panel.remove_admin_command))
     
-    application.add_handler(CallbackQueryHandler(bot.handle_main_menu, pattern='^(in_person|online)$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_main_menu, pattern='^(in_person|online|nutrition_plan)$'))
     application.add_handler(CallbackQueryHandler(bot.handle_course_details, pattern='^(in_person_cardio|in_person_weights|online_weights|online_cardio|online_combo)$'))
     application.add_handler(CallbackQueryHandler(bot.handle_payment, pattern='^payment_'))
     application.add_handler(CallbackQueryHandler(bot.handle_coupon_request, pattern='^coupon_'))
@@ -2225,9 +2331,8 @@ def main():
         ]
         await app.bot.set_my_commands(commands)
         
-        # Initialize bot and sync admins from environment
+        # Initialize bot only (admin sync happens here)
         await bot.initialize()
-        await startup_admin_sync()
     
     # Initialize commands on startup
     application.post_init = setup_commands

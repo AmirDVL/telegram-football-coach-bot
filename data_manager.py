@@ -33,8 +33,12 @@ class DataManager:
             if 'users' not in bot_data:
                 bot_data['users'] = {}
             
+            # Get existing user data and merge with new data
+            existing_data = bot_data['users'].get(str(user_id), {})
+            
             bot_data['users'][str(user_id)] = {
-                **data,
+                **existing_data,  # Keep existing data
+                **data,          # Add/update with new data
                 'last_updated': datetime.now().isoformat(),
                 'user_id': user_id
             }
@@ -182,3 +186,21 @@ class DataManager:
         except Exception as e:
             print(f"Error loading data: {e}")
             return {}
+
+    async def save_data(self, data_type: str, data: Dict[str, Any]):
+        """Save specific data type to file"""
+        try:
+            async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                bot_data = json.loads(content) if content else {}
+            
+            bot_data[data_type] = data
+            
+            async with aiofiles.open(self.data_file, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(bot_data, ensure_ascii=False, indent=2))
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error saving {data_type} data: {e}")
+            return False
