@@ -75,7 +75,8 @@ class Config:
         'in_person_weights': 3000000,
         'online_weights': 599000,
         'online_cardio': 599000,
-        'online_combo': 999000
+        'online_combo': 999000,
+        'nutrition_plan': 500000
     }
     
     # Default coupon codes (can be overridden by admin-created ones)

@@ -14,6 +14,7 @@ class AdminPanel:
         self.admin_manager = AdminManager()
         self.data_manager = DataManager()
         self.coupon_manager = CouponManager()
+        self.admin_creating_coupons = set()  # Track which admins are creating coupons
     
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Main admin menu"""
@@ -82,6 +83,12 @@ class AdminPanel:
             await self.show_import_instructions(query, 'payments')
         elif query.data == 'admin_view_coupons':
             await self.show_coupons_list(query)
+        elif query.data == 'admin_create_coupon':
+            await self.handle_create_coupon(query, user_id)
+        elif query.data == 'admin_toggle_coupon':
+            await self.handle_toggle_coupon(query)
+        elif query.data == 'admin_delete_coupon':
+            await self.handle_delete_coupon(query)
         elif query.data == 'admin_manage_admins':
             await self.show_admin_management(query, user_id)
         elif query.data == 'admin_cleanup_non_env':
@@ -90,10 +97,17 @@ class AdminPanel:
             await self.handle_add_admin(query, user_id)
         elif query.data.startswith('admin_remove_admin_'):
             await self.handle_remove_admin(query, user_id)
+        elif query.data.startswith('toggle_coupon_'):
+            await self.process_toggle_coupon(query)
+        elif query.data.startswith('delete_coupon_'):
+            await self.process_delete_coupon(query)
         elif query.data == 'admin_back_main':
             await self.back_to_admin_main(query, user_id)
         elif query.data == 'admin_back_start':
             await self.back_to_admin_start(query, user_id)
+        elif query.data == 'admin_menu':
+            # Fix: handle coupon menu back button
+            await self.admin_menu_callback(query)
     
     async def show_statistics(self, query) -> None:
         """Show bot statistics"""
@@ -121,16 +135,14 @@ class AdminPanel:
                 if course:
                     course_stats[course] = course_stats.get(course, 0) + 1
             
-            stats_text = f"""📊 آمار کلی ربات:
-
-👥 تعداد کل کاربران: {total_users}
-💳 تعداد کل پرداخت‌ها: {total_payments}
-  ✅ تایید شده: {approved_payments}
-  ⏳ در انتظار: {pending_payments}
-  ❌ رد شده: {rejected_payments}
-💰 درآمد کل (تایید شده): {total_revenue:,} تومان
-
-📚 آمار دوره‌ها:"""
+            stats_text = "📊 آمار کلی ربات:\n\n"
+            stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
+            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments}\n"
+            stats_text += f"  ✅ تایید شده: {approved_payments}\n"
+            stats_text += f"  ⏳ در انتظار: {pending_payments}\n"
+            stats_text += f"  ❌ رد شده: {rejected_payments}\n"
+            stats_text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
+            stats_text += "📚 آمار دوره‌ها:"
             
             for course, count in course_stats.items():
                 course_name = {
@@ -279,13 +291,21 @@ class AdminPanel:
             text += "🆕 آخرین کاربران:\n"
             for user_id, user_data in recent_users:
                 name = user_data.get('name', 'نامشخص')
+                username = user_data.get('username', '')
                 course = user_data.get('course', 'انتخاب نشده')
-                text += f"• {name} ({user_id}) - {course}\n"
+                
+                # Create clickable profile link
+                if username:
+                    profile_link = f"[{name}](https://t.me/{username})"
+                else:
+                    profile_link = f"[{name}](tg://user?id={user_id})"
+                
+                text += f"• {profile_link} ({user_id}) - {course}\n"
             
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.edit_message_text(text, reply_markup=reply_markup)
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
             
         except Exception as e:
             await query.edit_message_text(f"❌ خطا: {str(e)}")
@@ -361,11 +381,11 @@ class AdminPanel:
             [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats'),
              InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
             [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users'),
-             InlineKeyboardButton("� حالت کاربر", callback_data='admin_user_mode')]
+             InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')]
         ]
         
         if can_manage_admins:
-            keyboard.append([InlineKeyboardButton("� مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+            keyboard.append([InlineKeyboardButton("⚙️ مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -490,9 +510,9 @@ class AdminPanel:
                     is_env_admin = (
                         admin.get('added_by') == 'env_sync' or 
                         admin.get('env_admin') == True or
-                        admin.get('synced_from_config') == True or  # Current JSON format
-                        admin.get('force_synced') == True or       # Current JSON format
-                        admin_id in env_admin_ids                  # Always preserve env IDs
+                        admin.get('synced_from_config') == True or
+                        admin.get('force_synced') == True or
+                        admin_id in env_admin_ids
                     )
                     
                     if is_env_admin:
@@ -518,10 +538,7 @@ class AdminPanel:
                     remaining_admins_dict = {}
                     for admin in admins_data:
                         if admin not in non_env_admins:
-                            user_id = str(admin.get('user_id'))
-                            admin_copy = admin.copy()
-                            admin_copy.pop('user_id', None)  # Remove user_id from the data since it's the key
-                            remaining_admins_dict[user_id] = admin_copy
+                            remaining_admins_dict[str(admin['user_id'])] = admin
                     
                     await self.data_manager.save_data('admins', remaining_admins_dict)
                 else:
@@ -1217,3 +1234,165 @@ user_id,course_type,price,status
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    async def handle_create_coupon(self, query, user_id: int) -> None:
+        """Handle creating a new coupon code"""
+        await query.answer()
+        
+        # Set flag that admin is creating a coupon
+        self.admin_creating_coupons.add(user_id)
+        
+        text = (
+            "➕ ایجاد کد تخفیف جدید\n\n"
+            "برای ایجاد کد تخفیف جدید، لطفاً اطلاعات زیر را با فرمت مشخص شده ارسال کنید:\n\n"
+            "📝 فرمت:\n"
+            "کد_تخفیف درصد_تخفیف توضیحات\n\n"
+            "🔤 مثال:\n"
+            "WELCOME20 20 کد تخفیف خوش‌آمدگویی\n\n"
+            "⚠️ نکات:\n"
+            "• کد تخفیف باید انگلیسی باشد\n"
+            "• درصد تخفیف عددی بین 1 تا 100\n"
+            "• توضیحات اختیاری است"
+        )
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def handle_admin_coupon_creation(self, update, text_answer: str) -> None:
+        # Handle admin coupon creation from text input
+        user_id = update.effective_user.id
+        
+        # Remove admin from creating state
+        self.admin_creating_coupons.discard(user_id)
+        
+        try:
+            # Parse input: "CODE PERCENT description"
+            parts = text_answer.strip().split()
+            if len(parts) < 2:
+                raise ValueError("Not enough parts")
+            
+            code = parts[0].upper()
+            discount_percent = int(parts[1])
+            description = " ".join(parts[2:]) if len(parts) > 2 else ""
+            
+            # Validate
+            if not code.replace('_', '').isalnum():
+                raise ValueError(f"Invalid code format: {code}")
+            if not (1 <= discount_percent <= 100):
+                raise ValueError(f"Invalid discount percent: {discount_percent}")
+            
+            # Create coupon
+            success = self.coupon_manager.create_coupon(
+                code=code,
+                discount_percent=discount_percent,
+                description=description,
+                created_by=f"admin_{user_id}"
+            )
+            
+            if success:
+                text = f"✅ کد تخفیف {code} با موفقیت ایجاد شد!\n\n"
+                text += f"💰 تخفیف: {discount_percent}%\n"
+                text += f"📝 توضیحات: {description or 'ندارد'}"
+            else:
+                text = f"❌ خطا در ایجاد کد تخفیف!\nاحتمالا کد {code} قبلا وجود دارد."
+                
+        except ValueError as e:
+            error_msg = str(e)
+            text = f"❌ فرمت نادرست! خطا: {error_msg}\n\n"
+            text += "لطفاً فرمت صحیح را رعایت کنید:\n"
+            text += "کد_تخفیف درصد_تخفیف توضیحات\n\n"
+            text += "مثال: WELCOME20 20 کد تخفیف خوش‌آمدگویی\n\n"
+            text += "⚠️ نکات:\n"
+            text += "• کد تخفیف باید انگلیسی باشد\n"
+            text += "• درصد تخفیف عددی بین 1 تا 100"
+        except Exception as e:
+            text = f"❌ خطای غیرمنتظره: {str(e)}"
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(text, reply_markup=reply_markup)
+
+    async def handle_toggle_coupon(self, query) -> None:
+        # Handle toggling coupon active status
+        await query.answer()
+        
+        coupons = self.coupon_manager.get_all_coupons()
+        
+        if not coupons:
+            text = "❌ هیچ کد تخفیفی برای تغییر وضعیت وجود ندارد!"
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
+        else:
+            text = "🔄 انتخاب کد تخفیف برای تغییر وضعیت:\n\n"
+            keyboard = []
+            
+            for code, details in coupons.items():
+                status = "✅ فعال" if details.get('active', False) else "❌ غیرفعال"
+                keyboard.append([InlineKeyboardButton(
+                    f"{code} - {status}", 
+                    callback_data=f'toggle_coupon_{code}'
+                )])
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def handle_delete_coupon(self, query) -> None:
+        # Handle deleting coupon codes
+        await query.answer()
+        
+        coupons = self.coupon_manager.get_all_coupons()
+        
+        if not coupons:
+            text = "❌ هیچ کد تخفیفی برای حذف وجود ندارد!"
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
+        else:
+            text = "🗑️ انتخاب کد تخفیف برای حذف:\n\n⚠️ توجه: این عمل غیرقابل بازگشت است!"
+            keyboard = []
+            
+            for code, details in coupons.items():
+                usage = details.get('usage_count', 0)
+                keyboard.append([InlineKeyboardButton(
+                    f"❌ {code} (استفاده: {usage})", 
+                    callback_data=f'delete_coupon_{code}'
+                )])
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def process_toggle_coupon(self, query) -> None:
+        # Process toggling a specific coupon
+        coupon_code = query.data.replace('toggle_coupon_', '')
+        new_status = self.coupon_manager.toggle_coupon(coupon_code)
+        
+        if new_status is not None:
+            # Show brief confirmation in the callback answer (small popup)
+            status_text = "فعال" if new_status else "غیرفعال"
+            await query.answer(f"✅ {coupon_code} {status_text} شد", show_alert=False)
+            
+            # Immediately return to the toggle menu with updated buttons
+            await self.handle_toggle_coupon(query)
+        else:
+            # Show error in callback answer
+            await query.answer(f"❌ خطا در تغییر {coupon_code}", show_alert=True)
+
+    async def process_delete_coupon(self, query) -> None:
+        # Process deleting a specific coupon
+        await query.answer()
+        
+        coupon_code = query.data.replace('delete_coupon_', '')
+        success = self.coupon_manager.delete_coupon(coupon_code)
+        
+        if success:
+            text = f"✅ کد تخفیف {coupon_code} با موفقیت حذف شد!"
+        else:
+            text = f"❌ خطا در حذف کد تخفیف {coupon_code}"
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)

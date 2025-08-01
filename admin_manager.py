@@ -308,12 +308,32 @@ class AdminManager:
                         print(f"Admin {admin_id} {role_change}")
                         updated_count += 1
             
+            # CLEANUP: Remove admins that are no longer in config but were added by config_sync
+            removed_count = 0
+            current_admin_ids = set(admin_ids)
+            admins_to_remove = []
+            
+            for admin_id in admins_data['admins'][:]:  # Create a copy to iterate over
+                admin_id_int = int(admin_id)
+                admin_permissions = admins_data['admin_permissions'].get(str(admin_id), {})
+                
+                # Only remove admins that were originally synced from config
+                if (admin_id_int not in current_admin_ids and 
+                    admin_permissions.get('synced_from_config', False)):
+                    
+                    admins_to_remove.append(admin_id_int)
+                    admins_data['admins'].remove(admin_id)
+                    if str(admin_id) in admins_data['admin_permissions']:
+                        del admins_data['admin_permissions'][str(admin_id)]
+                    removed_count += 1
+                    print(f"Admin with ID {admin_id} removed (no longer in config).")
+            
             # Save updated data
             await self.save_admins(admins_data)
             
-            total_changes = synced_count + updated_count
+            total_changes = synced_count + updated_count + removed_count
             if total_changes > 0:
-                print(f"Admin sync completed. {synced_count} new admins added, {updated_count} roles updated.")
+                print(f"Admin sync completed. {synced_count} new admins added, {updated_count} roles updated, {removed_count} admins removed.")
             else:
                 print(f"Admin sync completed. 0 new admins added.")
             return True

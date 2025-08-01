@@ -147,11 +147,33 @@ class DataManager:
                 else:
                     print(f"Admin with ID {admin_id} already exists.")
             
+            # CLEANUP: Remove admins that are no longer in config but were added by config sync
+            removed_count = 0
+            current_admin_ids = set(str(admin_id) for admin_id in admin_ids)
+            admins_to_remove = []
+            
+            for admin_id_str, admin_data in list(bot_data['admins'].items()):
+                # Only remove admins that were originally synced from config
+                if (admin_id_str not in current_admin_ids and 
+                    admin_data.get('synced_from_config', False)):
+                    
+                    admins_to_remove.append(admin_id_str)
+                    removed_count += 1
+                    print(f"Admin with ID {admin_id_str} removed (no longer in config).")
+            
+            # Remove the identified admins
+            for admin_id_str in admins_to_remove:
+                del bot_data['admins'][admin_id_str]
+            
             # Save updated data
             async with aiofiles.open(self.data_file, 'w', encoding='utf-8') as f:
                 await f.write(json.dumps(bot_data, ensure_ascii=False, indent=2))
             
-            print(f"Admin sync completed. {synced_count} new admins added.")
+            total_changes = synced_count + removed_count
+            if total_changes > 0:
+                print(f"Admin sync completed. {synced_count} new admins added, {removed_count} admins removed.")
+            else:
+                print(f"Admin sync completed. 0 new admins added.")
             return True
             
         except Exception as e:

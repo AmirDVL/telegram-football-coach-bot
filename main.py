@@ -305,10 +305,26 @@ class FootballCoachBot:
                     keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
                 
                 # Enhanced welcome message showing completion status and purchased courses
+                nutrition_info = """
+
+🥗 برنامه غذایی شخصی‌سازی شده
+
+با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده تهیه می‌شود.
+
+برای دریافت برنامه غذایی، لطفاً روی لینک زیر کلیک کنید:
+
+👈 https://fitava.ir/coach/drbohloul/question
+
+✨ این برنامه شامل:
+• برنامه غذایی کامل بر اساس نیازهای شما
+• راهنمایی تخصصی تغذیه ورزشی
+• پیگیری و تنظیم برنامه
+❌توجه داشته باشید همه فیلدهای فرم رو پر کنید وبرای قسمت اعداد، کیورد اعداد انگلیسی رو وارد کنید"""
+
                 if course_count > 1:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
                 else:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
             else:
                 # Questionnaire not completed
                 current_step = questionnaire_status.get('current_step', 1)
@@ -421,28 +437,22 @@ class FootballCoachBot:
         if user_id is None:
             keyboard = [
                 [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')],
-                [InlineKeyboardButton("🥗 برنامه غذایی", callback_data='nutrition_plan')]
+                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')]
             ]
         else:
-            # Get purchased courses to add tick marks
+            # Get purchased courses to add tick marks only for specific purchased courses
             purchased_courses = await self.get_user_purchased_courses(user_id)
             
             in_person_text = "1️⃣ دوره تمرین حضوری"
             online_text = "2️⃣ دوره تمرین آنلاین"
             
-            # Check if user has any in-person courses
-            if any(course in purchased_courses for course in ['in_person_cardio', 'in_person_weights']):
-                in_person_text += " ✅"
-            
-            # Check if user has any online courses  
-            if any(course in purchased_courses for course in ['online_weights', 'online_cardio', 'online_combo']):
-                online_text += " ✅"
+            # Only add checkmark if user has ANY purchased course
+            # The specific course checkmark will be shown in subcategories
+            # We don't add ✅ here anymore since it should only appear for specific purchased courses
             
             keyboard = [
                 [InlineKeyboardButton(in_person_text, callback_data='in_person')],
-                [InlineKeyboardButton(online_text, callback_data='online')],
-                [InlineKeyboardButton("🥗 برنامه غذایی", callback_data='nutrition_plan')]
+                [InlineKeyboardButton(online_text, callback_data='online')]
             ]
         
         return InlineKeyboardMarkup(keyboard)
@@ -563,29 +573,6 @@ class FootballCoachBot:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
-            
-        elif query.data == 'nutrition_plan':
-            # Handle nutrition plan selection
-            nutrition_message = """🥗 برنامه غذایی شخصی‌سازی شده
-
-با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده تهیه می‌شود.
-
-برای دریافت برنامه غذایی، لطفاً روی لینک زیر کلیک کنید:
-
-👈 https://fitava.ir/coach/drbohloul/question
-
-✨ این برنامه شامل:
-• برنامه غذایی کامل بر اساس نیازهای شما
-• راهنمایی تخصصی تغذیه ورزشی
-• پیگیری و تنظیم برنامه
-
-🔙 برای بازگشت به منوی اصلی، دکمه زیر را فشار دهید."""
-            
-            keyboard = [
-                [InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_main')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(nutrition_message, reply_markup=reply_markup)
 
     async def handle_course_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle detailed course information"""
@@ -657,7 +644,7 @@ class FootballCoachBot:
             await update.message.reply_text(
                 "❌ خطایی رخ داده است. لطفاً مجدداً دوره را انتخاب کنید.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_main')]
+                    [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
                 ])
             )
             return
@@ -1070,7 +1057,20 @@ class FootballCoachBot:
         # Format prices properly
         final_price_text = Config.format_price(final_price)
         
-        payment_message = f"""برای پرداخت به شماره کارت زیر واریز کنید:
+        payment_message = f"""🥗 برنامه غذایی شخصی‌سازی شده
+
+با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده برای بازیکنان حرفه ای فوتبال تهیه می‌شود.
+
+✨ این برنامه شامل:
+• برنامه غذایی کامل بر اساس نیازهای شما
+• راهنمایی تخصصی تغذیه ورزشی
+• پیگیری و تنظیم برنامه
+
+واریزی رو انجام دادی فیش رو  همینجا ارسال میکنی میریم توی کارش🤝😊💎
+
+🔙 برای بازگشت به منوی اصلی، دکمه زیر را فشار دهید.
+
+برای پرداخت به شماره کارت زیر واریز کنید:
 
 💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
@@ -1093,7 +1093,7 @@ class FootballCoachBot:
 ⚠️ توجه: فقط فیش واریز رو ارسال کنید"""
         
         keyboard = [
-            [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+            [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_user_menu')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1725,6 +1725,11 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         text_answer = update.message.text
         
+        # Check if admin is creating a coupon
+        if user_id in self.admin_panel.admin_creating_coupons:
+            await self.admin_panel.handle_admin_coupon_creation(update, text_answer)
+            return
+        
         # Check if we're waiting for a coupon code
         if context.user_data.get('waiting_for_coupon'):
             await self.handle_coupon_code(update, context, text_answer)
@@ -1780,7 +1785,7 @@ class FootballCoachBot:
             # User is not in questionnaire mode - show helpful message
             keyboard = [
                 [InlineKeyboardButton("📝 شروع پرسشنامه", callback_data='start_questionnaire')],
-                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_main')]
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
@@ -1932,6 +1937,18 @@ class FootballCoachBot:
         
         await query.edit_message_text(Config.WELCOME_MESSAGE, reply_markup=reply_markup)
 
+    async def back_to_user_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Return to appropriate user menu based on their current status"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        user_data = await self.data_manager.get_user_data(user_id)
+        user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
+        
+        # Show status-based menu (this handles editing automatically)
+        await self.show_status_based_menu(update, user_data, user_name)
+
     async def back_to_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Return to course selection (online/offline)"""
         query = update.callback_query
@@ -2068,7 +2085,7 @@ class FootballCoachBot:
         
         keyboard.extend([
             [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_main')]
+            [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
         ])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2076,12 +2093,34 @@ class FootballCoachBot:
 
     async def show_payment_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show detailed payment status"""
-        payment_status = user_data.get('payment_status', 'none')
-        course_code = user_data.get('course_selected', 'نامشخص')
-        course_name = self.get_course_name_farsi(course_code)
+        query = update.callback_query
+        user_id = update.effective_user.id
         
-        if payment_status == 'pending_approval':
-            message = f"""⏳ **وضعیت پرداخت**
+        try:
+            # Get payment data using the existing logic from get_user_status
+            payments_data = await self.data_manager.load_data('payments')
+            user_payment = None
+            
+            # Find the most recent payment for this user
+            for payment_id, payment_data in payments_data.items():
+                if payment_data.get('user_id') == user_id:
+                    if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
+                        user_payment = payment_data
+            
+            payment_status = None
+            
+            if user_payment:
+                payment_status = user_payment.get('status')
+                course_code = user_payment.get('course_type', 'نامشخص')
+            else:
+                # Fallback to user_data payment_status (for backward compatibility)
+                payment_status = user_data.get('payment_status')
+                course_code = user_data.get('course_selected', user_data.get('course', 'نامشخص'))
+            
+            course_name = self.get_course_name_farsi(course_code)
+            
+            if payment_status == 'pending' or payment_status == 'pending_approval':
+                message = f"""⏳ **وضعیت پرداخت**
 
 دوره: {course_name}
 وضعیت: در انتظار تایید ادمین
@@ -2090,32 +2129,47 @@ class FootballCoachBot:
 معمولاً این فرآیند تا 24 ساعت طول می‌کشد.
 
 در صورت تایید، بلافاصله اطلاع‌رسانی خواهید شد."""
-        elif payment_status == 'approved':
-            message = f"""✅ **وضعیت پرداخت**
+            elif payment_status == 'approved':
+                message = f"""✅ **وضعیت پرداخت**
 
 دوره: {course_name}
 وضعیت: تایید شده
 
 پرداخت شما با موفقیت تایید شده است!
 اکنون می‌توانید برنامه تمرینی خود را دریافت کنید."""
-        elif payment_status == 'rejected':
-            message = f"""❌ **وضعیت پرداخت**
+            elif payment_status == 'rejected':
+                message = f"""❌ **وضعیت پرداخت**
 
 دوره: {course_name}
 وضعیت: رد شده
 
 متاسفانه پرداخت شما تایید نشده است.
 لطفاً با پشتیبانی تماس بگیرید یا مجدداً پرداخت کنید."""
-        else:
-            message = "شما هنوز پرداختی انجام نداده‌اید."
-        
-        keyboard = [
-            [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data='my_status')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+            else:
+                message = "شما هنوز پرداختی انجام نداده‌اید یا اطلاعات پرداخت شما یافت نشد."
+            
+            keyboard = [
+                [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='my_status')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            # Fallback error message
+            error_message = """❌ متاسفانه خطایی در دریافت وضعیت پرداخت رخ داد.
+
+لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."""
+            
+            keyboard = [
+                [InlineKeyboardButton("📞 تماس با پشتیبانی", callback_data='contact_support')],
+                [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='check_payment_status')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='my_status')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(error_message, reply_markup=reply_markup)
 
     async def continue_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Continue questionnaire from where user left off"""
@@ -2305,9 +2359,12 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
+    application.add_handler(CallbackQueryHandler(bot.back_to_user_menu, pattern='^back_to_user_menu$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_course_selection, pattern='^back_to_(online|in_person)$'))
     # Admin start menu handlers (must come before generic admin_ handler)
     application.add_handler(CallbackQueryHandler(bot.handle_admin_start_callbacks, pattern='^(admin_panel_main|admin_quick_stats|admin_pending_payments|admin_new_users|admin_manage_admins|admin_user_mode|admin_back_start|admin_payments_detailed|admin_quick_approve|confirm_approve_all)$'))
+    # Admin coupon handlers (must come before generic admin_ handler)
+    application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(toggle_coupon_|delete_coupon_)'))
     # Generic admin handlers (catch remaining admin_ callbacks)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^admin_'))
     
