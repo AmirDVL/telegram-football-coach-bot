@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import asyncio
 import os
 import json
@@ -15,12 +16,168 @@ from questionnaire_manager import QuestionnaireManager
 from image_processor import ImageProcessor
 from coupon_manager import CouponManager
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO if not Config.DEBUG else logging.DEBUG
-)
-logger = logging.getLogger(__name__)
+# Enhanced logging configuration
+def setup_enhanced_logging():
+    """Set up comprehensive logging with file rotation and multiple log files"""
+    # Create logs directory if it doesn't exist
+    logs_dir = "logs"
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Remove all existing handlers to start fresh
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Set root logger level based on debug mode
+    log_level = logging.DEBUG if Config.DEBUG else logging.INFO
+    root_logger.setLevel(log_level)
+    
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    simple_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    
+    # 1. Main application log (rotating)
+    main_handler = logging.handlers.RotatingFileHandler(
+        filename=os.path.join(logs_dir, "bot.log"),
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    main_handler.setLevel(logging.INFO)
+    main_handler.setFormatter(detailed_formatter)
+    
+    # 2. Error-only log
+    error_handler = logging.handlers.RotatingFileHandler(
+        filename=os.path.join(logs_dir, "errors.log"),
+        maxBytes=5*1024*1024,  # 5MB
+        backupCount=3,
+        encoding='utf-8'
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(detailed_formatter)
+    
+    # 3. Debug log (if debug mode is on)
+    if Config.DEBUG:
+        debug_handler = logging.handlers.RotatingFileHandler(
+            filename=os.path.join(logs_dir, "debug.log"),
+            maxBytes=20*1024*1024,  # 20MB
+            backupCount=2,
+            encoding='utf-8'
+        )
+        debug_handler.setLevel(logging.DEBUG)
+        debug_handler.setFormatter(detailed_formatter)
+        root_logger.addHandler(debug_handler)
+    
+    # 4. Console handler (for terminal output)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(simple_formatter)
+    
+    # 5. User interactions log (for analytics)
+    user_handler = logging.handlers.RotatingFileHandler(
+        filename=os.path.join(logs_dir, "user_interactions.log"),
+        maxBytes=5*1024*1024,  # 5MB
+        backupCount=3,
+        encoding='utf-8'
+    )
+    user_handler.setLevel(logging.INFO)
+    user_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    
+    # 6. Admin actions log (for audit trail)
+    admin_handler = logging.handlers.RotatingFileHandler(
+        filename=os.path.join(logs_dir, "admin_actions.log"),
+        maxBytes=5*1024*1024,  # 5MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    admin_handler.setLevel(logging.INFO)
+    admin_handler.setFormatter(detailed_formatter)
+    
+    # 7. Payment transactions log (for financial audit)
+    payment_handler = logging.handlers.RotatingFileHandler(
+        filename=os.path.join(logs_dir, "payments.log"),
+        maxBytes=5*1024*1024,  # 5MB
+        backupCount=10,  # Keep more payment logs
+        encoding='utf-8'
+    )
+    payment_handler.setLevel(logging.INFO)
+    payment_handler.setFormatter(detailed_formatter)
+    
+    # Add all handlers to root logger
+    root_logger.addHandler(main_handler)
+    root_logger.addHandler(error_handler)
+    root_logger.addHandler(console_handler)
+    
+    # Create specialized loggers
+    user_logger = logging.getLogger('user_interactions')
+    user_logger.addHandler(user_handler)
+    user_logger.setLevel(logging.INFO)
+    
+    admin_logger = logging.getLogger('admin_actions')
+    admin_logger.addHandler(admin_handler)
+    admin_logger.setLevel(logging.INFO)
+    
+    payment_logger = logging.getLogger('payments')
+    payment_logger.addHandler(payment_handler)
+    payment_logger.setLevel(logging.INFO)
+    
+    # Log startup information
+    logging.info("=" * 80)
+    logging.info("🤖 Football Coach Bot Enhanced Logging System Initialized")
+    logging.info(f"📁 Log files location: {os.path.abspath(logs_dir)}")
+    logging.info(f"📊 Log level: {logging.getLevelName(log_level)}")
+    logging.info(f"🔧 Debug mode: {'ON' if Config.DEBUG else 'OFF'}")
+    logging.info("=" * 80)
+    
+    return {
+        'main': logging.getLogger(__name__),
+        'user': user_logger,
+        'admin': admin_logger,
+        'payment': payment_logger
+    }
+
+# Initialize enhanced logging
+loggers = setup_enhanced_logging()
+logger = loggers['main']
+user_logger = loggers['user']
+admin_logger = loggers['admin']
+payment_logger = loggers['payment']
+
+# Convenience functions for logging
+def log_user_action(user_id: int, username: str, action: str, details: str = ""):
+    """Log user interactions for analytics"""
+    message = f"USER:{user_id}(@{username}) - {action}"
+    if details:
+        message += f" - {details}"
+    user_logger.info(message)
+
+def log_admin_action(admin_id: int, action: str, details: str = ""):
+    """Log admin actions for audit trail"""
+    message = f"ADMIN:{admin_id} - {action}"
+    if details:
+        message += f" - {details}"
+    admin_logger.info(message)
+
+def log_payment_action(user_id: int, action: str, amount: int = 0, course: str = "", admin_id: int = None):
+    """Log payment-related actions"""
+    message = f"PAYMENT - User:{user_id} - {action}"
+    if amount:
+        message += f" - Amount:{amount}"
+    if course:
+        message += f" - Course:{course}"
+    if admin_id:
+        message += f" - Admin:{admin_id}"
+    payment_logger.info(message)
 
 class FootballCoachBot:
     def __init__(self):
@@ -35,7 +192,7 @@ class FootballCoachBot:
     async def initialize(self):
         """Initialize bot on startup - comprehensive admin sync"""
         try:
-            print("🔧 Initializing admin sync from environment variables...")
+            logger.info("🔧 Initializing admin sync from environment variables...")
             
             # Check if using database mode
             if Config.USE_DATABASE:
@@ -43,7 +200,7 @@ class FootballCoachBot:
             else:
                 await self._sync_admins_json()
         except Exception as e:
-            print(f"⚠️  Warning: Failed to sync admins: {e}")
+            logger.warning(f"⚠️  Warning: Failed to sync admins: {e}")
     
     async def notify_all_admins_payment_update(self, bot, payment_user_id: int, action: str, acting_admin_name: str, course_title: str = "", price: int = 0, user_name: str = ""):
         """Notify all admins when a payment status changes"""
@@ -91,7 +248,7 @@ class FootballCoachBot:
         if not admin_ids:
             return
         
-        print(f"🔄 Syncing {len(admin_ids)} admin(s) to JSON mode...")
+        logger.info(f"🔄 Syncing {len(admin_ids)} admin(s) to JSON mode...")
         
         # Get current super admin from config (ADMIN_ID)
         config_super_admin = Config.ADMIN_ID
@@ -122,7 +279,7 @@ class FootballCoachBot:
                         'env_admin': True,
                         'synced_from_config': True
                     }
-                    print(f"  ✅ Added admin to JSON: {admin_id}")
+                    logger.info(f"  ✅ Added admin to JSON: {admin_id}")
                     added_count += 1
                 else:
                     # Update existing admin's super admin status if changed
@@ -131,7 +288,7 @@ class FootballCoachBot:
                         admins_data[str(admin_id)]['is_super_admin'] = is_super
                         admins_data[str(admin_id)]['updated_at'] = datetime.now().isoformat()
                         role_change = "promoted to super admin" if is_super else "demoted from super admin"
-                        print(f"  🎖️ Admin {admin_id} {role_change}")
+                        logger.info(f"  🎖️ Admin {admin_id} {role_change}")
                         updated_count += 1
         else:
             # List format: [{user_id: x, ...}, ...]
@@ -159,7 +316,7 @@ class FootballCoachBot:
                         'added_by': 'env_sync',
                         'env_admin': True
                     })
-                    print(f"  ✅ Added admin to JSON: {admin_id}")
+                    logger.info(f"  ✅ Added admin to JSON: {admin_id}")
                     added_count += 1
                 else:
                     # Update existing admin's super admin status if changed
@@ -174,14 +331,14 @@ class FootballCoachBot:
                                     admin['permissions']['can_add_admins'] = is_super
                                     admin['permissions']['can_remove_admins'] = is_super
                                 role_change = "promoted to super admin" if is_super else "demoted from super admin"
-                                print(f"  🎖️ Admin {admin_id} {role_change}")
+                                logger.info(f"  🎖️ Admin {admin_id} {role_change}")
                                 updated_count += 1
                             break
         
         # Save updated admins
         await self.data_manager.save_data('admins', admins_data)
         total_changes = added_count + updated_count
-        print(f"🎉 JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated. Manual cleanup available via /admin_panel.")
+        logger.info(f"🎉 JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated. Manual cleanup available via /admin_panel.")
     
     async def _sync_admins_database(self):
         """Comprehensive admin sync for database mode using admin_manager"""
@@ -189,15 +346,15 @@ class FootballCoachBot:
         if not admin_ids:
             return
         
-        print(f"🔄 Syncing {len(admin_ids)} admin(s) to database mode...")
+        logger.info(f"🔄 Syncing {len(admin_ids)} admin(s) to database mode...")
         
         # Use the comprehensive sync method from admin_manager
         success = await self.admin_panel.admin_manager.sync_admins_from_config()
         
         if success:
-            print(f"🎉 Database admin sync completed! Manual cleanup available via /admin_panel.")
+            logger.info(f"🎉 Database admin sync completed! Manual cleanup available via /admin_panel.")
         else:
-            print(f"⚠️ Database admin sync encountered issues.")
+            logger.warning(f"⚠️ Database admin sync encountered issues.")
     
     async def notify_all_admins(self, context, message, reply_markup=None, photo=None):
         """Send notification to all admins"""
@@ -234,6 +391,9 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
+        # Log user interaction
+        log_user_action(user_id, user_name, "executed /start command")
+        
         # Get existing user data to check status
         user_data = await self.data_manager.get_user_data(user_id)
         
@@ -244,6 +404,10 @@ class FootballCoachBot:
             'started_bot': True,
             'last_interaction': asyncio.get_event_loop().time()
         })
+        
+        # Refresh user_data after save and ensure user_id is set
+        user_data = await self.data_manager.get_user_data(user_id)
+        user_data['user_id'] = user_id
         
         # Check user status and show appropriate menu
         await self.show_status_based_menu(update, user_data, user_name)
@@ -260,7 +424,12 @@ class FootballCoachBot:
                 return
         
         # Determine user status
-        status = await self.get_user_status(user_data)
+        try:
+            status = await self.get_user_status(user_data)
+        except Exception as e:
+            logger.error(f"Error determining user status for user {user_id}: {e}")
+            # Default to returning user if status determination fails
+            status = 'returning_user'
         
         if status == 'new_user':
             # First-time user - show welcome and course selection
@@ -513,6 +682,7 @@ class FootballCoachBot:
         elif query.data == 'admin_user_mode':
             # Show regular user interface
             user_data = await self.data_manager.get_user_data(user_id)
+            user_data['user_id'] = user_id  # Ensure user_id is set
             user_name = update.effective_user.first_name or "ادمین"
             # Use the consolidated function with admin_mode=True
             await self.show_status_based_menu(update, user_data, user_name, admin_mode=True)
@@ -527,6 +697,9 @@ class FootballCoachBot:
         query = update.callback_query
         await query.answer()
         user_id = update.effective_user.id
+        user_name = update.effective_user.first_name or "کاربر"
+        
+        log_user_action(user_id, user_name, f"selected menu option: {query.data}")
         
         if query.data == 'in_person':
             # Check which courses user has purchased
@@ -602,7 +775,8 @@ class FootballCoachBot:
             keyboard = [
                 [InlineKeyboardButton(f"💳 پرداخت و ثبت نام ({price_text})", callback_data=f'payment_{query.data}')],
                 [InlineKeyboardButton("🏷️ کد تخفیف دارم", callback_data=f'coupon_{query.data}')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'back_to_{"online" if query.data.startswith("online") else "in_person"}')]
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'back_to_{"online" if query.data.startswith("online") else "in_person"}')],
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(message_text, reply_markup=reply_markup)
@@ -1105,9 +1279,13 @@ class FootballCoachBot:
     async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle photo uploads - either payment receipts or questionnaire photos"""
         user_id = update.effective_user.id
+        user_name = update.effective_user.first_name or "کاربر"
+        
+        logger.debug(f"📷 Photo received from user {user_id} ({user_name})")
         
         # First, validate that this is actually a photo message
         if not update.message or not update.message.photo:
+            logger.warning(f"⚠️ Non-photo message received from user {user_id}")
             await update.message.reply_text(
                 "❌ فقط تصاویر قابل پردازش هستند!\n\n"
                 "لطفاً یک عکس ارسال کنید (نه فایل یا متن)."
@@ -1179,6 +1357,9 @@ class FootballCoachBot:
         course_type = course_selected  # Get from user_data instead of payment_pending
         
         try:
+            # Log payment receipt submission
+            log_payment_action(user_id, user_name, f"submitted payment receipt for course: {course_selected}")
+            
             # Save receipt info with photo file_id
             await self.data_manager.save_user_data(user_id, {
                 'receipt_submitted': True,
@@ -1928,14 +2109,17 @@ class FootballCoachBot:
             await query.edit_message_text(f"❌ خطا در شروع پرسشنامه: {result['message']}")
 
     async def back_to_main(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Return to main menu"""
+        """Return to main menu using unified status-based menu"""
         query = update.callback_query
         await query.answer()
         
         user_id = update.effective_user.id
-        reply_markup = await self.create_course_selection_keyboard(user_id)
+        user_data = await self.data_manager.get_user_data(user_id)
+        user_data['user_id'] = user_id  # Ensure user_id is set
+        user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
         
-        await query.edit_message_text(Config.WELCOME_MESSAGE, reply_markup=reply_markup)
+        # Use the same unified menu system as /start command
+        await self.show_status_based_menu(update, user_data, user_name)
 
     async def back_to_user_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Return to appropriate user menu based on their current status"""
@@ -1944,17 +2128,28 @@ class FootballCoachBot:
         
         user_id = update.effective_user.id
         user_data = await self.data_manager.get_user_data(user_id)
+        user_data['user_id'] = user_id  # Ensure user_id is set
         user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
         
         # Show status-based menu (this handles editing automatically)
         await self.show_status_based_menu(update, user_data, user_name)
 
-    async def back_to_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Return to course selection (online/offline)"""
+    async def back_to_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle back navigation to course categories (online/in_person)"""
         query = update.callback_query
         await query.answer()
         
-        # Extract which section to go back to from callback data
+        user_id = update.effective_user.id
+        
+        # Extract category from callback data
+        if query.data == 'back_to_online':
+            # Simulate clicking 'online' to show online courses
+            query.data = 'online'
+            await self.handle_main_menu(update, context)
+        elif query.data == 'back_to_in_person':
+            # Simulate clicking 'in_person' to show in-person courses  
+            query.data = 'in_person'
+            await self.handle_main_menu(update, context)
         course_type = query.data.replace('back_to_', '')  # 'online' or 'in_person'
         
         # Simulate the original selection to show the course list
@@ -2028,6 +2223,7 @@ class FootballCoachBot:
         elif query.data == 'contact_coach':
             await self.show_coach_contact(update, context)
         elif query.data == 'new_course':
+            # Start new course selection process
             await self.start_new_course_selection(update, context)
         elif query.data == 'start_over':
             # Restart the bot flow from the beginning
@@ -2035,6 +2231,27 @@ class FootballCoachBot:
         elif query.data == 'start_questionnaire':
             # Start the questionnaire directly
             await self.start_questionnaire_from_callback(update, context)
+
+    async def start_new_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start new course selection process"""
+        try:
+            user_id = update.effective_user.id
+            purchased_courses = await self.get_user_purchased_courses(user_id)
+            
+            # Create course selection keyboard
+            course_keyboard = await self.create_course_selection_keyboard(user_id)
+            # Add status button to the existing keyboard
+            keyboard = list(course_keyboard.inline_keyboard) + [
+                [InlineKeyboardButton("📊 وضعیت فعلی", callback_data='my_status')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            message = "انتخاب دوره جدید:\n\nکدام دوره را می‌خواهید انتخاب کنید?"
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+            
+        except Exception as e:
+            logging.error(f"Error in start_new_course_selection: {e}")
+            await update.callback_query.answer("متاسفانه خطایی رخ داد. لطفا دوباره تلاش کنید.")
 
     async def show_user_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show comprehensive user status"""
@@ -2271,19 +2488,6 @@ class FootballCoachBot:
         
         await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def start_new_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Start new course selection process"""
-        user_id = update.effective_user.id
-        course_keyboard = await self.create_course_selection_keyboard(user_id)
-        # Add status button to the existing keyboard
-        keyboard = list(course_keyboard.inline_keyboard) + [
-            [InlineKeyboardButton("📊 وضعیت فعلی", callback_data='my_status')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        message = "انتخاب دوره جدید:\n\nکدام دوره را می‌خواهید انتخاب کنید?"
-        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
-
     def get_payment_status_text(self, status: str) -> str:
         """Convert payment status to Persian text"""
         status_map = {
@@ -2360,7 +2564,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_user_menu, pattern='^back_to_user_menu$'))
-    application.add_handler(CallbackQueryHandler(bot.back_to_course_selection, pattern='^back_to_(online|in_person)$'))
+    application.add_handler(CallbackQueryHandler(bot.back_to_category, pattern='^back_to_(online|in_person)$'))
     # Admin start menu handlers (must come before generic admin_ handler)
     application.add_handler(CallbackQueryHandler(bot.handle_admin_start_callbacks, pattern='^(admin_panel_main|admin_quick_stats|admin_pending_payments|admin_new_users|admin_manage_admins|admin_user_mode|admin_back_start|admin_payments_detailed|admin_quick_approve|confirm_approve_all)$'))
     # Admin coupon handlers (must come before generic admin_ handler)
@@ -2396,6 +2600,7 @@ def main():
     
     # Start the bot
     logger.info("Starting Football Coach Bot...")
+    logger.info("📱 Bot is ready to receive messages!")
     print("🤖 Football Coach Bot is starting...")
     print("📱 Bot is ready to receive messages!")
 

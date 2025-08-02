@@ -344,7 +344,7 @@ class QuestionnaireManager:
 📊 بر اساس پاسخ‌هایت، برنامه تمرینی شخصی‌سازی شده‌ای آماده می‌کنم
 ⏰ تا چند ساعت آینده برنامه کاملت رو دریافت خواهی کرد
 
-🔥 آماده‌ای تا بهترین ورژن خودت بشی؟
+� آماده‌ای تا بهترین ورژن خودت بشی؟
 
 📞 اگر سوالی داری، با پشتیبانی در ارتباط باش."""
 
@@ -364,6 +364,79 @@ class QuestionnaireManager:
                 summary += f"{emoji} {self.get_question_title(int(step))}: {answer}\n"
         
         return summary
+
+    async def save_photo_answer(self, user_id: int, file_id: str, file_path: str) -> Dict[str, Any]:
+        """Save photo answer for user"""
+        progress = await self.load_user_progress(user_id)
+        if not progress:
+            return {"status": "error", "message": "User not in questionnaire"}
+        
+        current_step = progress["current_step"]
+        current_question = self.get_question(current_step, progress["answers"])
+        
+        if not current_question or current_question.get("type") != "photo":
+            return {"status": "error", "message": "Current question is not a photo question"}
+        
+        # Initialize photos storage
+        if "photos" not in progress["answers"]:
+            progress["answers"]["photos"] = {}
+        
+        if str(current_step) not in progress["answers"]["photos"]:
+            progress["answers"]["photos"][str(current_step)] = []
+        
+        # Add photo info
+        photo_info = {
+            "file_id": file_id,
+            "file_path": file_path,
+            "uploaded_at": datetime.now().isoformat()
+        }
+        progress["answers"]["photos"][str(current_step)].append(photo_info)
+        
+        # Check if we have enough photos
+        required_count = current_question.get("photo_count", 1)
+        current_count = len(progress["answers"]["photos"][str(current_step)])
+        
+        if current_count >= required_count:
+            # Mark step as completed and move to next
+            progress["answers"][str(current_step)] = f"تصاویر ارسال شد ({current_count} عکس)"
+            progress["last_updated"] = datetime.now().isoformat()
+            
+            # Move to next step
+            next_step = current_step + 1
+            while next_step <= 21:
+                next_question = self.get_question(next_step, progress["answers"])
+                if next_question is not None:
+                    break
+                next_step += 1
+            
+            if next_step > 21:
+                # Questionnaire completed
+                progress["completed"] = True
+                progress["completed_at"] = datetime.now().isoformat()
+                await self.save_user_progress(user_id, progress)
+                return {
+                    "status": "completed",
+                    "message": self.get_completion_message()
+                }
+            else:
+                progress["current_step"] = next_step
+                await self.save_user_progress(user_id, progress)
+                next_question = self.get_question(next_step, progress["answers"])
+                return {
+                    "status": "continue",
+                    "question": next_question,
+                    "step": next_step,
+                    "progress_text": f"سوال {next_step} از 21"
+                }
+        else:
+            # Need more photos
+            await self.save_user_progress(user_id, progress)
+            remaining = required_count - current_count
+            return {
+                "status": "need_more_photos",
+                "message": f"✅ عکس دریافت شد! لطفاً {remaining} عکس دیگر ارسال کنید.",
+                "remaining_photos": remaining
+            }
 
     def get_question_title(self, step: int) -> str:
         """Get short title for each question"""

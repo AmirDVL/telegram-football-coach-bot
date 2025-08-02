@@ -82,6 +82,15 @@ Deployment_Linux.md
 bot.txt
 .gitignore_new
 
+# 🤖 AI ASSISTANT AND TEMPORARY FILES
+*_with_old_method.py
+*_clean.py
+test_course_selection.py
+github_copilot_instructions.txt
+copilot_instructions.md
+ai_instructions.md
+.copilot/
+
 # 🛠️ DEVELOPMENT SECURITY MODULES (not needed in production)
 security_config.py
 security_integration.py

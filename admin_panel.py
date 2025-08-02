@@ -31,7 +31,7 @@ class AdminPanel:
             [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
             [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("📥 واردات/صادرات داده", callback_data='admin_import_export')]
+            [InlineKeyboardButton("� اکسپورت", callback_data='admin_export_menu')]
         ]
         
         if can_manage_admins:
@@ -61,14 +61,18 @@ class AdminPanel:
             await self.show_users_management(query)
         elif query.data == 'admin_payments':
             await self.show_payments_management(query)
-        elif query.data == 'admin_import_export':
-            await self.show_import_export_menu(query)
+        elif query.data == 'admin_export_menu':
+            await self.show_export_menu(query)
         elif query.data == 'admin_coupons':
             await self.show_coupon_management(query)
         elif query.data == 'admin_export_users':
             await self.export_users_csv(query)
         elif query.data == 'admin_export_payments':
             await self.export_payments_csv(query)
+        elif query.data == 'admin_export_questionnaire':
+            await self.export_questionnaire_csv(query)
+        elif query.data == 'admin_export_person':
+            await self.show_completed_users_list(query)
         elif query.data == 'admin_export_telegram':
             await self.export_telegram_csv(query)
         elif query.data == 'admin_export_all':
@@ -77,10 +81,10 @@ class AdminPanel:
             await self.generate_users_template(query)
         elif query.data == 'admin_template_payments':
             await self.generate_payments_template(query)
-        elif query.data == 'admin_import_users':
-            await self.show_import_instructions(query, 'users')
-        elif query.data == 'admin_import_payments':
-            await self.show_import_instructions(query, 'payments')
+        elif query.data.startswith('export_user_'):
+            # Handle user-specific export
+            user_id = query.data.replace('export_user_', '')
+            await self.export_user_personal_data(query, user_id)
         elif query.data == 'admin_view_coupons':
             await self.show_coupons_list(query)
         elif query.data == 'admin_create_coupon':
@@ -345,55 +349,42 @@ class AdminPanel:
             await query.edit_message_text(f"❌ خطا: {str(e)}")
     
     async def back_to_admin_main(self, query, user_id: int) -> None:
-        """Return to comprehensive admin panel"""
+        """Return to unified admin command hub"""
+        await self.show_unified_admin_panel(query, user_id)
+    
+    async def back_to_admin_start(self, query, user_id: int) -> None:
+        """Return to unified admin command hub (legacy compatibility)"""
+        await self.show_unified_admin_panel(query, user_id)
+    
+    async def show_unified_admin_panel(self, query, user_id: int) -> None:
+        """Unified admin command hub - the ONLY admin panel"""
         is_super = await self.admin_manager.is_super_admin(user_id)
         can_manage_admins = await self.admin_manager.can_add_admins(user_id)
+        user_name = query.from_user.first_name or "ادمین"
         
         keyboard = [
             [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats'),
              InlineKeyboardButton("📈 آمار سریع", callback_data='admin_quick_stats')],
-            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users'),
+            [InlineKeyboardButton("� مدیریت کاربران", callback_data='admin_users'),
              InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("📥 واردات/صادرات", callback_data='admin_import_export'),
+            [InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments'),
+             InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users')],
+            [InlineKeyboardButton("� اکسپورت", callback_data='admin_export_menu'),
              InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
         ]
         
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='admin_back_start')])
+        keyboard.append([InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"🎛️ پنل مدیریت کامل\n\n{admin_type} - همه‌ی ابزارهای مدیریت:"
+        welcome_text = f"🎛️ Admin Command Hub\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
         
         await query.edit_message_text(welcome_text, reply_markup=reply_markup)
-    
-    async def back_to_admin_start(self, query, user_id: int) -> None:
-        """Return to streamlined admin start menu"""
-        is_super = await self.admin_manager.is_super_admin(user_id)
-        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
-        user_name = query.from_user.first_name or "ادمین"
-        
-        keyboard = [
-            [InlineKeyboardButton("🎛️ پنل مدیریت کامل", callback_data='admin_panel_main')],
-            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats'),
-             InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
-            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users'),
-             InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')]
-        ]
-        
-        if can_manage_admins:
-            keyboard.append([InlineKeyboardButton("⚙️ مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"سلام {user_name}! 👋\n\n{admin_type} عزیز، به ربات مربی فوتبال خوش آمدید 🎛️\n\nانتخاب کنید:"
-        
-        await query.edit_message_text(welcome_text, reply_markup=reply_markup)
-    
+
     async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /add_admin command"""
         user_id = update.effective_user.id
@@ -619,14 +610,14 @@ class AdminPanel:
              InlineKeyboardButton("📈 آمار سریع", callback_data='admin_quick_stats')],
             [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users'),
              InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("📥 واردات/صادرات", callback_data='admin_import_export'),
+            [InlineKeyboardButton("� اکسپورت", callback_data='admin_export_menu'),
              InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
         ]
         
         if can_manage_admins:
             keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
         
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='admin_back_start')])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='admin_back_main')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -658,7 +649,7 @@ class AdminPanel:
             
             keyboard = [
                 [InlineKeyboardButton("📊 آمار کامل", callback_data='admin_stats')],
-                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')]
+                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -691,7 +682,7 @@ class AdminPanel:
             
             keyboard = [
                 [InlineKeyboardButton("💳 مدیریت کامل پرداخت‌ها", callback_data='admin_payments')],
-                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')]
+                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -729,7 +720,7 @@ class AdminPanel:
             
             keyboard = [
                 [InlineKeyboardButton("👥 مدیریت کامل کاربران", callback_data='admin_users')],
-                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_start')]
+                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -738,22 +729,22 @@ class AdminPanel:
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در بارگیری کاربران: {str(e)}")
 
-    # 📥 IMPORT/EXPORT FUNCTIONALITY
-    async def show_import_export_menu(self, query) -> None:
-        """Show import/export options menu"""
-        text = """📥 مدیریت واردات/صادرات داده
+    # � EXPORT FUNCTIONALITY
+    async def show_export_menu(self, query) -> None:
+        """Show export options menu"""
+        text = """� اکسپورت
 
 انتخاب کنید:"""
         
         keyboard = [
             [InlineKeyboardButton("📤 صادرات کاربران (CSV)", callback_data='admin_export_users')],
             [InlineKeyboardButton("📤 صادرات پرداخت‌ها (CSV)", callback_data='admin_export_payments')],
+            [InlineKeyboardButton("📤 صادرات پرسشنامه (CSV)", callback_data='admin_export_questionnaire')],
+            [InlineKeyboardButton("📤 صادرات مدارک شخص خاص", callback_data='admin_export_person')],
             [InlineKeyboardButton("📤 صادرات تلگرام‌ها (CSV)", callback_data='admin_export_telegram')],
             [InlineKeyboardButton("📤 پشتیبان کامل (JSON)", callback_data='admin_export_all')],
             [InlineKeyboardButton("📋 دانلود نمونه کاربران", callback_data='admin_template_users')],
             [InlineKeyboardButton("📋 دانلود نمونه پرداخت‌ها", callback_data='admin_template_payments')],
-            [InlineKeyboardButton("📥 واردات کاربران", callback_data='admin_import_users')],
-            [InlineKeyboardButton("📥 واردات پرداخت‌ها", callback_data='admin_import_payments')],
             [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -772,7 +763,7 @@ class AdminPanel:
                 await query.edit_message_text(
                     "📭 هیچ کاربری برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
                     ])
                 )
                 return
@@ -816,7 +807,7 @@ class AdminPanel:
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("✅ فایل CSV کاربران ارسال شد!", reply_markup=reply_markup)
             
@@ -835,7 +826,7 @@ class AdminPanel:
                 await query.edit_message_text(
                     "📭 هیچ پرداختی برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
                     ])
                 )
                 return
@@ -879,12 +870,296 @@ class AdminPanel:
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("✅ فایل CSV پرداخت‌ها ارسال شد!", reply_markup=reply_markup)
             
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در صادرات پرداخت‌ها: {str(e)}")
+
+    async def export_questionnaire_csv(self, query) -> None:
+        """Export questionnaire data including photos to CSV format"""
+        try:
+            # Load questionnaire data
+            questionnaire_file = 'questionnaire_data.json'
+            if not os.path.exists(questionnaire_file):
+                await query.edit_message_text(
+                    "📭 هیچ داده پرسشنامه‌ای برای صادرات وجود ندارد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                    ])
+                )
+                return
+            
+            with open(questionnaire_file, 'r', encoding='utf-8') as f:
+                questionnaire_data = json.load(f)
+            
+            if not questionnaire_data:
+                await query.edit_message_text(
+                    "📭 هیچ پرسشنامه‌ای تکمیل نشده است!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                    ])
+                )
+                return
+            
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
+            headers = [
+                'user_id', 'نام_فامیل', 'سن', 'قد', 'وزن', 'تجربه_لیگ', 'وقت_تمرین',
+                'هدف_مسابقات', 'وضعیت_تیم', 'تمرین_اخیر', 'جزئیات_هوازی', 'جزئیات_وزنه',
+                'تجهیزات', 'اولویت_اصلی', 'مصدومیت', 'تغذیه_خواب', 'نوع_تمرین', 'چالش‌ها',
+                'تعداد_عکس', 'مسیرهای_عکس', 'بهبود_بدنی', 'شبکه‌های_اجتماعی', 'شماره_تماس',
+                'تاریخ_شروع', 'تاریخ_تکمیل', 'وضعیت_تکمیل'
+            ]
+            writer.writerow(headers)
+            
+            # Write questionnaire data
+            for user_id, user_progress in questionnaire_data.items():
+                answers = user_progress.get('answers', {})
+                photos = answers.get('photos', {})
+                
+                # Count photos and create paths list
+                photo_count = 0
+                photo_paths = []
+                for step_photos in photos.values():
+                    if isinstance(step_photos, list):
+                        photo_count += len(step_photos)
+                        photo_paths.extend([photo.get('file_path', '') for photo in step_photos])
+                
+                row = [
+                    user_id,
+                    answers.get('1', ''),  # نام فامیل
+                    answers.get('2', ''),  # سن
+                    answers.get('3', ''),  # قد
+                    answers.get('4', ''),  # وزن
+                    answers.get('5', ''),  # تجربه لیگ
+                    answers.get('6', ''),  # وقت تمرین
+                    answers.get('7', ''),  # هدف مسابقات
+                    answers.get('8', ''),  # وضعیت تیم
+                    answers.get('9', ''),  # تمرین اخیر
+                    answers.get('10', ''), # جزئیات هوازی
+                    answers.get('11', ''), # جزئیات وزنه
+                    answers.get('12', ''), # تجهیزات
+                    answers.get('13', ''), # اولویت اصلی
+                    answers.get('14', ''), # مصدومیت
+                    answers.get('15', ''), # تغذیه خواب
+                    answers.get('16', ''), # نوع تمرین
+                    answers.get('17', ''), # چالش‌ها
+                    photo_count,           # تعداد عکس
+                    '|'.join(photo_paths), # مسیرهای عکس (جدا شده با |)
+                    answers.get('19', ''), # بهبود بدنی
+                    answers.get('20', ''), # شبکه‌های اجتماعی
+                    answers.get('21', ''), # شماره تماس
+                    user_progress.get('started_at', ''),
+                    user_progress.get('completed_at', ''),
+                    'تکمیل شده' if user_progress.get('completed', False) else 'در حال انجام'
+                ]
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send CSV file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"questionnaire_export_{timestamp}.csv"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(csv_content.encode('utf-8')),
+                filename=filename,
+                caption=f"📤 صادرات پرسشنامه‌ها\n\n"
+                       f"📊 تعداد: {len(questionnaire_data)} پرسشنامه\n"
+                       f"📷 شامل اطلاعات عکس‌ها\n"
+                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            )
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل CSV پرسشنامه‌ها ارسال شد!", reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در صادرات پرسشنامه‌ها: {str(e)}")
+
+    async def show_completed_users_list(self, query) -> None:
+        """Show list of users who completed questionnaire for personal export"""
+        try:
+            # Load questionnaire data
+            questionnaire_file = 'questionnaire_data.json'
+            if not os.path.exists(questionnaire_file):
+                await query.edit_message_text(
+                    "📭 هیچ کاربری پرسشنامه تکمیل نکرده است!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                    ])
+                )
+                return
+            
+            with open(questionnaire_file, 'r', encoding='utf-8') as f:
+                questionnaire_data = json.load(f)
+            
+            # Load user data to get names
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            
+            users = bot_data.get('users', {})
+            completed_users = []
+            
+            for user_id, q_data in questionnaire_data.items():
+                if q_data.get('completed', False):
+                    user_info = users.get(user_id, {})
+                    user_name = user_info.get('name', 'نامشخص')
+                    user_phone = user_info.get('phone', 'نامشخص')
+                    completion_date = q_data.get('completion_timestamp', q_data.get('completed_at', ''))
+                    
+                    # Count photos and documents
+                    photos_count = len([a for a in q_data.get('answers', {}).values() if isinstance(a, dict) and a.get('type') == 'photo'])
+                    documents_count = len(user_info.get('documents', []))
+                    
+                    completed_users.append({
+                        'user_id': user_id,
+                        'name': user_name,
+                        'phone': user_phone,
+                        'completion_date': completion_date,
+                        'photos_count': photos_count,
+                        'documents_count': documents_count
+                    })
+            
+            if not completed_users:
+                await query.edit_message_text(
+                    "📭 هیچ کاربری پرسشنامه تکمیل نکرده است!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                    ])
+                )
+                return
+            
+            # Sort by completion date (newest first)
+            completed_users.sort(key=lambda x: x['completion_date'], reverse=True)
+            
+            # Create buttons for each user (max 20 users to avoid message length issues)
+            keyboard = []
+            text = "👥 کاربران تکمیل‌کننده پرسشنامه:\n\n"
+            
+            for i, user in enumerate(completed_users[:20]):
+                user_id = user['user_id']
+                name = user['name']
+                phone = user['phone']
+                photos = user['photos_count']
+                docs = user['documents_count']
+                
+                text += f"{i+1}. {name} ({phone})\n📷 {photos} عکس | 📎 {docs} سند\n\n"
+                
+                keyboard.append([InlineKeyboardButton(
+                    f"{i+1}. {name} ({phone}) - 📷{photos} 📎{docs}",
+                    callback_data=f'export_user_{user_id}'
+                )])
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if len(completed_users) > 20:
+                text += f"\n⚠️ فقط 20 کاربر اول نمایش داده شد. کل: {len(completed_users)} کاربر"
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در بارگذاری لیست کاربران: {str(e)}")
+
+    async def export_user_personal_data(self, query, user_id: str) -> None:
+        """Export all data for a specific user including questionnaire photos and documents"""
+        try:
+            # Load all data
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            
+            questionnaire_file = 'questionnaire_data.json'
+            questionnaire_data = {}
+            if os.path.exists(questionnaire_file):
+                with open(questionnaire_file, 'r', encoding='utf-8') as f:
+                    questionnaire_data = json.load(f)
+            
+            # Get user data
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_questionnaire = questionnaire_data.get(user_id, {})
+            
+            if not user_data:
+                await query.edit_message_text(
+                    "❌ کاربر یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_person')]
+                    ])
+                )
+                return
+            
+            user_name = user_data.get('name', 'نامشخص')
+            
+            # Create comprehensive user report
+            report = f"""📋 گزارش کامل کاربر: {user_name}
+
+👤 اطلاعات شخصی:
+• نام: {user_data.get('name', 'نامشخص')}
+• تلفن: {user_data.get('phone', 'نامشخص')}
+• شناسه: {user_id}
+• دوره: {user_data.get('course_selected', 'نامشخص')}
+• وضعیت پرداخت: {user_data.get('payment_status', 'نامشخص')}
+
+📝 پرسشنامه:
+• وضعیت: {'تکمیل شده' if user_questionnaire.get('completed') else 'تکمیل نشده'}
+• تاریخ تکمیل: {user_questionnaire.get('completion_timestamp', user_questionnaire.get('completed_at', 'نامشخص'))}
+
+📷 تصاویر پرسشنامه: {len([a for a in user_questionnaire.get('answers', {}).values() if isinstance(a, dict) and a.get('type') == 'photo'])}
+📎 اسناد ارسالی: {len(user_data.get('documents', []))}
+
+"""
+            
+            # Add questionnaire answers
+            if user_questionnaire.get('answers'):
+                report += "\n📋 پاسخ‌های پرسشنامه:\n"
+                for step, answer in user_questionnaire.get('answers', {}).items():
+                    if isinstance(answer, dict):
+                        if answer.get('type') == 'photo':
+                            report += f"سوال {step}: [تصویر] {answer.get('file_path', 'مسیر نامشخص')}\n"
+                        else:
+                            report += f"سوال {step}: {answer.get('text', 'پاسخ نامشخص')}\n"
+                    else:
+                        report += f"سوال {step}: {answer}\n"
+            
+            # Add documents info
+            documents = user_data.get('documents', [])
+            if documents:
+                report += "\n📎 اسناد ارسالی:\n"
+                for i, doc in enumerate(documents, 1):
+                    report += f"{i}. {doc.get('file_name', 'نامشخص')} ({doc.get('file_type', 'نامشخص')})\n"
+                    report += f"   📅 {doc.get('upload_date', 'نامشخص')}\n"
+                    report += f"   📁 {doc.get('file_path', 'مسیر نامشخص')}\n\n"
+            
+            # Send as text file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"user_report_{user_id}_{timestamp}.txt"
+            
+            await query.message.reply_document(
+                document=io.BytesIO(report.encode('utf-8')),
+                filename=filename,
+                caption=f"📤 گزارش کامل کاربر {user_name}\n\n"
+                       f"📅 تاریخ تولید: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("🔙 بازگشت به لیست", callback_data='admin_export_person')],
+                [InlineKeyboardButton("📋 منوی اصلی", callback_data='admin_export_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"✅ گزارش کامل {user_name} ارسال شد!\n\n"
+                f"📋 شامل: اطلاعات شخصی، پاسخ‌های پرسشنامه، مسیر تصاویر و اسناد",
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در تولید گزارش: {str(e)}")
 
     async def export_all_data(self, query) -> None:
         """Export complete database as JSON with admin-friendly format"""
@@ -892,17 +1167,28 @@ class AdminPanel:
             with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
+            # Load questionnaire data if exists
+            questionnaire_data = {}
+            try:
+                with open('questionnaire_data.json', 'r', encoding='utf-8') as f:
+                    questionnaire_data = json.load(f)
+            except FileNotFoundError:
+                pass
+            
             # Create admin-friendly simplified data structure
             admin_data = {
                 "export_info": {
                     "generated_date": datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
                     "total_users": len(data.get('users', {})),
                     "total_payments": len(data.get('payments', {})),
+                    "total_questionnaires": len(questionnaire_data),
                     "description": "پشتیبان کامل داده‌های ربات مربی فوتبال"
                 },
                 "users_summary": [],
                 "payments_summary": [],
-                "complete_data": data  # Original data for technical recovery
+                "questionnaires_summary": [],
+                "complete_data": data,  # Original data for technical recovery
+                "questionnaire_data": questionnaire_data
             }
             
             # Create user summaries for easy reading
@@ -934,6 +1220,17 @@ class AdminPanel:
                 }
                 admin_data["payments_summary"].append(payment_summary)
             
+            # Create questionnaire summaries for easy reading
+            for user_id, user_questionnaire in questionnaire_data.items():
+                questionnaire_summary = {
+                    "user_id": user_id,
+                    "completed": user_questionnaire.get('completed', False),
+                    "completion_date": user_questionnaire.get('completion_timestamp', ''),
+                    "total_answers": len(user_questionnaire.get('answers', {})),
+                    "photos_uploaded": len([a for a in user_questionnaire.get('answers', {}).values() if isinstance(a, dict) and a.get('type') == 'photo'])
+                }
+                admin_data["questionnaires_summary"].append(questionnaire_summary)
+            
             # Create formatted JSON with proper indentation
             json_content = json.dumps(admin_data, ensure_ascii=False, indent=2)
             
@@ -947,11 +1244,12 @@ class AdminPanel:
                 caption=f"📤 پشتیبان کامل دیتابیس (فرمت ادمین)\n\n"
                        f"👥 کاربران: {len(data.get('users', {}))}\n"
                        f"💳 پرداخت‌ها: {len(data.get('payments', {}))}\n"
+                       f"📋 پرسشنامه‌ها: {len(questionnaire_data)}\n"
                        f"📋 شامل: خلاصه آسان + داده‌های کامل\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("✅ فایل پشتیبان کامل ارسال شد!", reply_markup=reply_markup)
             
@@ -970,7 +1268,7 @@ class AdminPanel:
                 await query.edit_message_text(
                     "📭 هیچ کاربری برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
                     ])
                 )
                 return
@@ -1017,172 +1315,14 @@ class AdminPanel:
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("✅ فایل CSV مخاطبین تلگرام ارسال شد!", reply_markup=reply_markup)
             
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در صادرات مخاطبین: {str(e)}")
 
-    async def generate_users_template(self, query) -> None:
-        """Generate template CSV file for users import"""
-        try:
-            # Create CSV template with sample data
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # CSV Headers
-            headers = [
-                'user_id', 'name', 'username', 'course_selected', 'payment_status',
-                'questionnaire_completed', 'registration_date', 'last_interaction'
-            ]
-            writer.writerow(headers)
-            
-            # Add sample rows with Persian examples
-            sample_rows = [
-                ['123456789', 'احمد محمدی', 'ahmad_user', 'in_person_weights', 'approved', 'true', '2024-01-15', '2024-01-20'],
-                ['987654321', 'فاطمه احمدی', 'fateme_user', 'online_cardio', 'pending_approval', 'false', '2024-01-16', '2024-01-18'],
-                ['555666777', 'علی رضایی', 'ali_sports', 'online_combo', 'approved', 'true', '2024-01-17', '2024-01-19']
-            ]
-            
-            for row in sample_rows:
-                writer.writerow(row)
-            
-            csv_content = output.getvalue()
-            
-            # Send template file
-            filename = "template_users_import.csv"
-            
-            await query.message.reply_document(
-                document=io.BytesIO(csv_content.encode('utf-8')),
-                filename=filename,
-                caption="""📋 نمونه فایل واردات کاربران
 
-این فایل شامل:
-✅ ستون‌های ضروری
-✅ نمونه داده‌های صحیح
-✅ فرمت مناسب
-
-نحوه استفاده:
-1️⃣ این فایل را دانلود کنید
-2️⃣ نمونه‌ها را پاک کنید
-3️⃣ اطلاعات واقعی را وارد کنید
-4️⃣ فایل را ذخیره و ارسال کنید"""
-            )
-            
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("✅ فایل نمونه کاربران ارسال شد!", reply_markup=reply_markup)
-            
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در ایجاد نمونه: {str(e)}")
-
-    async def generate_payments_template(self, query) -> None:
-        """Generate template CSV file for payments import"""
-        try:
-            # Create CSV template with sample data
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # CSV Headers
-            headers = [
-                'payment_id', 'user_id', 'course_type', 'price', 'status',
-                'payment_date', 'approval_date', 'rejection_reason'
-            ]
-            writer.writerow(headers)
-            
-            # Add sample rows with Persian examples
-            sample_rows = [
-                ['PAY001', '123456789', 'in_person_weights', '3000000', 'approved', '2024-01-15 10:30:00', '2024-01-15 14:20:00', ''],
-                ['PAY002', '987654321', 'online_cardio', '2000000', 'pending_approval', '2024-01-16 09:15:00', '', ''],
-                ['PAY003', '555666777', 'online_combo', '2500000', 'rejected', '2024-01-17 16:45:00', '2024-01-17 18:30:00', 'مدارک ناکافی']
-            ]
-            
-            for row in sample_rows:
-                writer.writerow(row)
-            
-            csv_content = output.getvalue()
-            
-            # Send template file
-            filename = "template_payments_import.csv"
-            
-            await query.message.reply_document(
-                document=io.BytesIO(csv_content.encode('utf-8')),
-                filename=filename,
-                caption="""📋 نمونه فایل واردات پرداخت‌ها
-
-این فایل شامل:
-✅ ستون‌های ضروری
-✅ نمونه داده‌های صحیح
-✅ فرمت تاریخ مناسب
-
-نحوه استفاده:
-1️⃣ این فایل را دانلود کنید
-2️⃣ نمونه‌ها را پاک کنید
-3️⃣ اطلاعات واقعی را وارد کنید
-4️⃣ فایل را ذخیره و ارسال کنید
-
-💡 توجه: قیمت‌ها به ریال وارد شوند"""
-            )
-            
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("✅ فایل نمونه پرداخت‌ها ارسال شد!", reply_markup=reply_markup)
-            
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در ایجاد نمونه: {str(e)}")
-
-    async def show_import_instructions(self, query, data_type: str) -> None:
-        """Show import instructions for different data types"""
-        if data_type == 'users':
-            instructions = """📥 واردات کاربران
-
-📋 فرمت CSV مورد نیاز:
-user_id,name,username,course_selected,payment_status
-123456789,احمد محمدی,ahmad_user,in_person_weights,approved
-987654321,فاطمه احمدی,fateme_user,online_cardio,pending_approval
-
-📌 ستون‌های ضروری:
-• user_id: شناسه عددی کاربر
-• name: نام و نام خانوادگی
-• username: نام کاربری تلگرام (اختیاری)
-• course_selected: نوع دوره انتخابی
-• payment_status: وضعیت پرداخت
-
-🔸 انواع دوره‌ها:
-• in_person_weights
-• in_person_cardio  
-• online_weights
-• online_cardio
-• online_combo
-
-🔸 وضعیت‌های پرداخت:
-• pending_approval
-• approved
-• rejected
-
-📤 برای واردات، فایل CSV را ارسال کنید."""
-            
-        elif data_type == 'payments':
-            instructions = """📥 واردات پرداخت‌ها
-
-📋 فرمت CSV مورد نیاز:
-user_id,course_type,price,status
-123456789,in_person_weights,3000000,approved
-987654321,online_cardio,2000000,pending_approval
-
-📌 ستون‌های ضروری:
-• user_id: شناسه عددی کاربر
-• course_type: نوع دوره
-• price: مبلغ پرداختی (به ریال)
-• status: وضعیت پرداخت
-
-📤 برای واردات، فایل CSV را ارسال کنید."""
-        
-        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_import_export')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(instructions, reply_markup=reply_markup)
 
     async def show_coupon_management(self, query) -> None:
         """Show coupon management menu"""
