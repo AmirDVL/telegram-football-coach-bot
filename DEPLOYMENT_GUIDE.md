@@ -140,64 +140,68 @@ chown footballbot:footballbot .env
 nano security_config.py
 ```
 
-Add this security configuration file:
+```bash
+# 6. Set secure file permissions
+chmod 600 .env
+chown footballbot:footballbot .env
 
-```python
-# security_config.py - Enhanced Security Settings
+# 7. Create log directory with proper permissions
+mkdir -p /opt/football-bot/logs
+chown footballbot:footballbot /opt/football-bot/logs
+```
 
-import logging
-import time
-from typing import Dict, Set
-from datetime import datetime, timedelta
+### **Step 5: Install Python Dependencies**
 
-class SecurityManager:
-    def __init__(self):
-        self.request_counts: Dict[int, list] = {}
-        self.blocked_users: Set[int] = set()
-        self.suspicious_activity_log = []
-        
-    def rate_limit_check(self, user_id: int, max_requests: int = 60) -> bool:
-        """Enhanced rate limiting with user tracking"""
-        current_time = time.time()
-        one_minute_ago = current_time - 60
-        
-        # Clean old requests
-        if user_id in self.request_counts:
-            self.request_counts[user_id] = [
-                req_time for req_time in self.request_counts[user_id] 
-                if req_time > one_minute_ago
-            ]
-        else:
-            self.request_counts[user_id] = []
-        
-        # Check if user exceeded limit
-        if len(self.request_counts[user_id]) >= max_requests:
-            self.log_suspicious_activity(user_id, "rate_limit_exceeded")
-            return False
-        
-        # Add current request
-        self.request_counts[user_id].append(current_time)
-        return True
-    
-    def validate_input(self, text: str) -> bool:
-        """Input validation to prevent injection attacks"""
-        # Block SQL injection patterns
-        sql_patterns = [
-            'DROP TABLE', 'DELETE FROM', 'INSERT INTO', 'UPDATE SET',
-            'UNION SELECT', '--', ';', 'CREATE TABLE', 'ALTER TABLE'
-        ]
-        
-        text_upper = text.upper()
-        for pattern in sql_patterns:
-            if pattern in text_upper:
-                return False
-        
-        # Block excessively long inputs
-        if len(text) > 1000:
-            return False
-            
-        return True
-#### **Step 7: Test PostgreSQL Compatibility**
+```bash
+# Switch to bot user and install dependencies
+sudo -u footballbot -s
+cd /opt/football-bot
+source venv/bin/activate
+
+# Install required packages
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### **Step 6: Configure Environment Variables**
+
+```bash
+# Create environment file from template
+cp .env.example .env
+
+# Edit environment file securely
+nano .env
+```
+
+Add your secure configuration:
+
+```env
+# Telegram Bot Configuration
+BOT_TOKEN=YOUR_BOT_TOKEN_FROM_BOTFATHER
+ADMIN_ID=YOUR_TELEGRAM_USER_ID
+
+# Database Configuration
+USE_DATABASE=true
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=football_coach_bot
+DB_USER=footballbot_app
+DB_PASSWORD=YourSecurePassword123!
+
+# Production Settings
+DEBUG=false
+MAX_REQUESTS_PER_MINUTE=60
+RATE_LIMIT_ENABLED=true
+LOG_LEVEL=INFO
+```
+
+```bash
+# Secure the environment file
+chmod 600 .env
+chown footballbot:footballbot .env
+```
+
+### **Step 7: Test PostgreSQL Compatibility**
 
 ```bash
 # Test database compatibility
@@ -221,51 +225,93 @@ python3 test_postgresql_compatibility.py
 🎉 CORE FUNCTIONALITY WORKS! PostgreSQL mode is compatible!
 ```
 
-#### **Step 9: Initialize Database Schema (After Tests Pass)**
+### **Step 8: Initialize Database Schema**
 
 ```bash
-# 1. Make sure you're in the bot directory with venv activated
-cd /opt/football-bot
-source venv/bin/activate
+# Initialize database tables and schema
+python -c "
+import asyncio
+from database_manager import DatabaseManager
 
-# 2. Initialize database tables
-  python3 -c "
-  import asyncio
-  from database_manager import DatabaseManager
+async def setup_db():
+    print('🔄 Initializing database...')
+    db = DatabaseManager()
+    await db.initialize()
+    print('✅ Database initialized successfully!')
+    await db.close()
 
-  async def setup_db():
-      print('Initializing database...')
-      db = DatabaseManager()
-      await db.initialize()
-      print('Database initialized successfully!')
-      await db.close()
-
-  asyncio.run(setup_db())
-  "
+asyncio.run(setup_db())
+"
 ```
 
-#### **Step 10: Test Bot Manually**
+### **Step 9: Test Bot Functionality**
 
 ```bash
-# 1. Test bot startup
+# Test bot startup manually
 cd /opt/football-bot
 source venv/bin/activate
-python3 main.py
+python main.py
 
 # You should see:
 # 🤖 Football Coach Bot is starting...
 # 📱 Bot is ready to receive messages!
 
-# 2. Test by sending /start to your bot on Telegram
-# 3. Stop the bot with Ctrl+C
+# Test by sending /start to your bot on Telegram
+# Stop the bot with Ctrl+C after testing
 ```
 
-#### **Step 9: Create Systemd Service**
+### **Step 10: Create Systemd Service**
 
 ```bash
 # Create service file
 sudo nano /etc/systemd/system/football-bot.service
 ```
+
+Add the following service configuration:
+
+```ini
+[Unit]
+Description=Football Coach Telegram Bot
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=footballbot
+Group=footballbot
+WorkingDirectory=/opt/football-bot
+Environment=PATH=/opt/football-bot/venv/bin
+ExecStart=/opt/football-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable football-bot
+sudo systemctl start football-bot
+
+# Check service status
+sudo systemctl status football-bot
+```
+
+### **Step 11: Set Up Automated Backups**
+
+# You should see:
+# 🤖 Football Coach Bot is starting...
+# 📱 Bot is ready to receive messages!
+
+# Test by sending /start to your bot on Telegram
+# Stop the bot with Ctrl+C after testing
+```
+
+### **Step 11: Set Up Automated Backups**
 
 ```ini
 [Unit]
