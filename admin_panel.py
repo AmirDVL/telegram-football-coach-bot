@@ -7,6 +7,7 @@ from config import Config
 import json
 import csv
 import io
+import os
 from datetime import datetime
 
 class AdminPanel:
@@ -17,32 +18,15 @@ class AdminPanel:
         self.admin_creating_coupons = set()  # Track which admins are creating coupons
     
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Main admin menu"""
+        """Redirect to unified admin hub - no separate menu"""
         user_id = update.effective_user.id
         
         if not await self.admin_manager.is_admin(user_id):
             await update.message.reply_text("❌ شما دسترسی ادمین ندارید.")
             return
         
-        is_super = await self.admin_manager.is_super_admin(user_id)
-        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
-        
-        keyboard = [
-            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats')],
-            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
-            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("� اکسپورت", callback_data='admin_export_menu')]
-        ]
-        
-        if can_manage_admins:
-            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"سلام {admin_type}!\n\nبه پنل مدیریت خوش آمدید 🎛️"
-        
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+        # Show the unified admin hub directly
+        await self.show_admin_hub_for_command(update, context, user_id)
     
     async def handle_admin_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle admin panel callbacks"""
@@ -109,6 +93,18 @@ class AdminPanel:
             await self.back_to_admin_main(query, user_id)
         elif query.data == 'admin_back_start':
             await self.back_to_admin_start(query, user_id)
+        elif query.data == 'admin_back_to_manage_admins':
+            await self.back_to_manage_admins(query, user_id)
+        elif query.data == 'admin_back_to_stats':
+            await self.back_to_stats_menu(query, user_id)
+        elif query.data == 'admin_back_to_users':
+            await self.back_to_users_menu(query, user_id)
+        elif query.data == 'admin_back_to_payments':
+            await self.back_to_payments_menu(query, user_id)
+        elif query.data == 'admin_back_to_export':
+            await self.back_to_export_menu(query, user_id)
+        elif query.data == 'admin_back_to_coupons':
+            await self.back_to_coupons_menu(query, user_id)
         elif query.data == 'admin_menu':
             # Fix: handle coupon menu back button
             await self.admin_menu_callback(query)
@@ -159,7 +155,7 @@ class AdminPanel:
                 
                 stats_text += f"\n• {course_name}: {count} نفر"
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(stats_text, reply_markup=reply_markup)
@@ -273,7 +269,7 @@ class AdminPanel:
         if is_super:
             keyboard.append([InlineKeyboardButton("🧹 پاک کردن ادمین‌های غیر محیطی", callback_data='admin_cleanup_non_env')])
         
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(text, reply_markup=reply_markup)
@@ -306,7 +302,7 @@ class AdminPanel:
                 
                 text += f"• {profile_link} ({user_id}) - {course}\n"
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -337,10 +333,19 @@ class AdminPanel:
             for payment_id, payment_data in recent_payments:
                 user_id = payment_data.get('user_id', 'نامشخص')
                 price = payment_data.get('price', 0)
-                course = payment_data.get('course_type', 'نامشخص')
-                text += f"• {user_id} - {price:,} تومان ({course})\n"
+                course_type = payment_data.get('course_type', 'نامشخص')
+                # Translate course type to Persian name
+                course_name = {
+                    'online_weights': 'وزنه آنلاین',
+                    'online_cardio': 'هوازی آنلاین', 
+                    'online_combo': 'ترکیبی آنلاین',
+                    'in_person_cardio': 'هوازی حضوری',
+                    'in_person_weights': 'وزنه حضوری',
+                    'nutrition_plan': 'برنامه غذایی'
+                }.get(course_type, course_type)
+                text += f"• {user_id} - {price:,} تومان ({course_name})\n"
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]]
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(text, reply_markup=reply_markup)
@@ -353,8 +358,40 @@ class AdminPanel:
         await self.show_unified_admin_panel(query, user_id)
     
     async def back_to_admin_start(self, query, user_id: int) -> None:
-        """Return to unified admin command hub (legacy compatibility)"""
+        """Return to main admin hub - the unified admin command center"""
         await self.show_unified_admin_panel(query, user_id)
+    
+    async def back_to_manage_admins(self, query, user_id: int) -> None:
+        """Return to admin management menu"""
+        await self.show_admin_management(query)
+    
+    async def back_to_stats_menu(self, query, user_id: int) -> None:
+        """Return to statistics menu"""
+        await self.show_statistics(query)
+    
+    async def back_to_users_menu(self, query, user_id: int) -> None:
+        """Return to users management menu"""
+        await self.show_user_management(query)
+    
+    async def back_to_payments_menu(self, query, user_id: int) -> None:
+        """Return to payments management menu"""
+        await self.show_payment_management(query)
+    
+    async def back_to_export_menu(self, query, user_id: int) -> None:
+        """Return to export menu"""
+        await self.show_export_menu(query)
+    
+    async def back_to_coupons_menu(self, query, user_id: int) -> None:
+        """Return to coupons management menu"""
+        await self.show_coupon_management(query)
+    
+    async def show_user_management(self, query) -> None:
+        """Show user management menu"""
+        await self.show_users_management(query)
+    
+    async def show_payment_management(self, query) -> None:
+        """Show payment management menu - placeholder that redirects to payments"""
+        await self.show_payments_management(query)
     
     async def show_unified_admin_panel(self, query, user_id: int) -> None:
         """Unified admin command hub - the ONLY admin panel"""
@@ -363,14 +400,11 @@ class AdminPanel:
         user_name = query.from_user.first_name or "ادمین"
         
         keyboard = [
-            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats'),
-             InlineKeyboardButton("📈 آمار سریع", callback_data='admin_quick_stats')],
-            [InlineKeyboardButton("� مدیریت کاربران", callback_data='admin_users'),
-             InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments'),
-             InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users')],
-            [InlineKeyboardButton("� اکسپورت", callback_data='admin_export_menu'),
-             InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
+            [InlineKeyboardButton("📊 آمار و گزارشات", callback_data='admin_stats'),
+             InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
+             InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
+            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
         ]
         
         if can_manage_admins:
@@ -381,9 +415,35 @@ class AdminPanel:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"🎛️ Admin Command Hub\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
+        welcome_text = f"🎛️ پنل مدیریت\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
         
         await query.edit_message_text(welcome_text, reply_markup=reply_markup)
+
+    async def show_admin_hub_for_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+        """Show the unified admin hub when called from command (/admin)"""
+        is_super = await self.admin_manager.is_super_admin(user_id)
+        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
+        user_name = update.effective_user.first_name or "ادمین"
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 آمار و گزارشات", callback_data='admin_stats'),
+             InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
+             InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
+            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
+        ]
+        
+        if can_manage_admins:
+            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+        
+        keyboard.append([InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
+        welcome_text = f"🎛️ پنل مدیریت\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
+        
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
     async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /add_admin command"""
@@ -458,8 +518,8 @@ class AdminPanel:
                 if removed_count == 0:
                     await query.edit_message_text(
                         "✅ هیچ ادمین غیر محیطی برای حذف یافت نشد.\n\n"
-                        "🔙 بازگشت به منوی ادمین‌ها",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]])
+                        "🔙 بازگشت به مدیریت ادمین‌ها",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به مدیریت ادمین‌ها", callback_data='admin_back_to_manage_admins')]])
                     )
                     return
                 
@@ -518,8 +578,8 @@ class AdminPanel:
                 if not non_env_admins:
                     await query.edit_message_text(
                         "✅ هیچ ادمین غیر محیطی برای حذف یافت نشد.\n\n"
-                        "🔙 بازگشت به منوی ادمین‌ها",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]])
+                        "🔙 بازگشت به مدیریت ادمین‌ها",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به مدیریت ادمین‌ها", callback_data='admin_back_to_manage_admins')]])
                     )
                     return
                 
@@ -565,8 +625,8 @@ class AdminPanel:
         except Exception as e:
             await query.edit_message_text(
                 f"❌ خطا در پاکسازی ادمین‌ها: {str(e)}\n\n"
-                "🔙 بازگشت به منوی ادمین‌ها",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_manage_admins')]])
+                "🔙 بازگشت به مدیریت ادمین‌ها",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به مدیریت ادمین‌ها", callback_data='admin_back_to_manage_admins')]])
             )
     
     async def get_id_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -595,68 +655,9 @@ class AdminPanel:
         await update.message.reply_text(text, parse_mode='Markdown')
 
     async def admin_menu_callback(self, query) -> None:
-        """Comprehensive admin panel accessible via callback"""
+        """Redirect to unified admin panel - no separate menu"""
         user_id = query.from_user.id
-        
-        if not await self.admin_manager.is_admin(user_id):
-            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
-            return
-        
-        is_super = await self.admin_manager.is_super_admin(user_id)
-        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
-        
-        keyboard = [
-            [InlineKeyboardButton("📊 آمار کلی", callback_data='admin_stats'),
-             InlineKeyboardButton("📈 آمار سریع", callback_data='admin_quick_stats')],
-            [InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users'),
-             InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments')],
-            [InlineKeyboardButton("� اکسپورت", callback_data='admin_export_menu'),
-             InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
-        ]
-        
-        if can_manage_admins:
-            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='admin_back_main')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"🎛️ پنل مدیریت کامل\n\n{admin_type} - همه‌ی ابزارهای مدیریت:"
-        
-        await query.edit_message_text(welcome_text, reply_markup=reply_markup)
-    
-    async def show_quick_statistics(self, query) -> None:
-        """Show quick statistics for admin start menu"""
-        try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            users = data.get('users', {})
-            payments = data.get('payments', {})
-            
-            total_users = len(users)
-            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
-            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
-            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
-            
-            stats_text = f"""📊 آمار سریع:
-
-👥 کل کاربران: {total_users}
-⏳ پرداخت‌های معلق: {pending_payments}
-✅ پرداخت‌های تایید شده: {approved_payments}
-💰 درآمد کل: {total_revenue:,} تومان"""
-            
-            keyboard = [
-                [InlineKeyboardButton("📊 آمار کامل", callback_data='admin_stats')],
-                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_main')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(stats_text, reply_markup=reply_markup)
-            
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در بارگیری آمار: {str(e)}")
+        await self.show_unified_admin_panel(query, user_id)
     
     async def show_pending_payments(self, query) -> None:
         """Show pending payments for quick admin access"""
@@ -682,7 +683,7 @@ class AdminPanel:
             
             keyboard = [
                 [InlineKeyboardButton("💳 مدیریت کامل پرداخت‌ها", callback_data='admin_payments')],
-                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_main')]
+                [InlineKeyboardButton("🔙 منوی اصلی ادمین", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -691,48 +692,10 @@ class AdminPanel:
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در بارگیری پرداخت‌ها: {str(e)}")
     
-    async def show_new_users(self, query) -> None:
-        """Show new users for quick admin access"""
-        try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            users = data.get('users', {})
-            
-            # Sort by registration (users with payments are considered "new" if recent)
-            new_users = []
-            for user_id, user_data in users.items():
-                if user_data.get('started_bot', False):
-                    new_users.append((user_id, user_data))
-            
-            # Get the 10 most recent users
-            recent_users = new_users[-10:] if len(new_users) > 10 else new_users
-            
-            if not recent_users:
-                text = "🤷‍♂️ هیچ کاربر جدیدی یافت نشد."
-            else:
-                text = f"👥 کاربران اخیر ({len(recent_users)} نفر):\n\n"
-                for user_id, user_data in recent_users:
-                    name = user_data.get('name', 'نامشخص')
-                    course = user_data.get('course', 'بدون دوره')
-                    status = user_data.get('payment_status', 'نامشخص')
-                    text += f"👤 {name} ({user_id})\n📚 {course} - {status}\n\n"
-            
-            keyboard = [
-                [InlineKeyboardButton("👥 مدیریت کامل کاربران", callback_data='admin_users')],
-                [InlineKeyboardButton("🔙 منوی ادمین", callback_data='admin_back_main')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(text, reply_markup=reply_markup)
-            
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در بارگیری کاربران: {str(e)}")
-
-    # � EXPORT FUNCTIONALITY
+    # 📥 EXPORT FUNCTIONALITY
     async def show_export_menu(self, query) -> None:
         """Show export options menu"""
-        text = """� اکسپورت
+        text = """📥 اکسپورت
 
 انتخاب کنید:"""
         
@@ -912,7 +875,7 @@ class AdminPanel:
                 'user_id', 'نام_فامیل', 'سن', 'قد', 'وزن', 'تجربه_لیگ', 'وقت_تمرین',
                 'هدف_مسابقات', 'وضعیت_تیم', 'تمرین_اخیر', 'جزئیات_هوازی', 'جزئیات_وزنه',
                 'تجهیزات', 'اولویت_اصلی', 'مصدومیت', 'تغذیه_خواب', 'نوع_تمرین', 'چالش‌ها',
-                'تعداد_عکس', 'مسیرهای_عکس', 'بهبود_بدنی', 'شبکه‌های_اجتماعی', 'شماره_تماس',
+                'تعداد_عکس', 'شناسه‌های_عکس', 'بهبود_بدنی', 'شبکه‌های_اجتماعی', 'شماره_تماس',
                 'تاریخ_شروع', 'تاریخ_تکمیل', 'وضعیت_تکمیل'
             ]
             writer.writerow(headers)
@@ -922,13 +885,13 @@ class AdminPanel:
                 answers = user_progress.get('answers', {})
                 photos = answers.get('photos', {})
                 
-                # Count photos and create paths list
+                # Count photos and create file_id list
                 photo_count = 0
-                photo_paths = []
+                photo_file_ids = []
                 for step_photos in photos.values():
                     if isinstance(step_photos, list):
                         photo_count += len(step_photos)
-                        photo_paths.extend([photo.get('file_path', '') for photo in step_photos])
+                        photo_file_ids.extend(step_photos)  # These are file_ids, not file_paths
                 
                 row = [
                     user_id,
@@ -950,7 +913,7 @@ class AdminPanel:
                     answers.get('16', ''), # نوع تمرین
                     answers.get('17', ''), # چالش‌ها
                     photo_count,           # تعداد عکس
-                    '|'.join(photo_paths), # مسیرهای عکس (جدا شده با |)
+                    '|'.join(photo_file_ids), # شناسه‌های عکس (جدا شده با |)
                     answers.get('19', ''), # بهبود بدنی
                     answers.get('20', ''), # شبکه‌های اجتماعی
                     answers.get('21', ''), # شماره تماس
@@ -1013,9 +976,16 @@ class AdminPanel:
                     user_phone = user_info.get('phone', 'نامشخص')
                     completion_date = q_data.get('completion_timestamp', q_data.get('completed_at', ''))
                     
-                    # Count photos and documents
-                    photos_count = len([a for a in q_data.get('answers', {}).values() if isinstance(a, dict) and a.get('type') == 'photo'])
-                    documents_count = len(user_info.get('documents', []))
+                    # Count photos correctly from photos object
+                    photos = q_data.get('answers', {}).get('photos', {})
+                    photos_count = 0
+                    for step_photos in photos.values():
+                        if isinstance(step_photos, list):
+                            photos_count += len(step_photos)
+                    
+                    # Count documents
+                    documents = q_data.get('answers', {}).get('documents', {})
+                    documents_count = len(documents)
                     
                     completed_users.append({
                         'user_id': user_id,
@@ -1095,6 +1065,17 @@ class AdminPanel:
             
             user_name = user_data.get('name', 'نامشخص')
             
+            # Translate course to Persian name
+            course_type = user_data.get('course_selected', 'نامشخص')
+            course_name = {
+                'online_weights': 'وزنه آنلاین',
+                'online_cardio': 'هوازی آنلاین', 
+                'online_combo': 'ترکیبی آنلاین',
+                'in_person_cardio': 'هوازی حضوری',
+                'in_person_weights': 'وزنه حضوری',
+                'nutrition_plan': 'برنامه غذایی'
+            }.get(course_type, course_type)
+            
             # Create comprehensive user report
             report = f"""📋 گزارش کامل کاربر: {user_name}
 
@@ -1102,7 +1083,7 @@ class AdminPanel:
 • نام: {user_data.get('name', 'نامشخص')}
 • تلفن: {user_data.get('phone', 'نامشخص')}
 • شناسه: {user_id}
-• دوره: {user_data.get('course_selected', 'نامشخص')}
+• دوره: {course_name}
 • وضعیت پرداخت: {user_data.get('payment_status', 'نامشخص')}
 
 📝 پرسشنامه:

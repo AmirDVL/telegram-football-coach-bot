@@ -410,9 +410,9 @@ class FootballCoachBot:
         user_data['user_id'] = user_id
         
         # Check user status and show appropriate menu
-        await self.show_status_based_menu(update, user_data, user_name)
+        await self.show_status_based_menu(update, context, user_data, user_name)
     
-    async def show_status_based_menu(self, update: Update, user_data: dict, user_name: str, admin_mode: bool = False) -> None:
+    async def show_status_based_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict, user_name: str, admin_mode: bool = False) -> None:
         """Show menu based on user's current status"""
         user_id = update.effective_user.id
         
@@ -420,7 +420,8 @@ class FootballCoachBot:
         if not admin_mode:
             is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
             if is_admin:
-                await self.show_admin_start_menu(update, user_name, user_id)
+                # Redirect admins directly to the unified admin hub
+                await self.show_admin_hub_for_start(update, context, user_id)
                 return
         
         # Determine user status
@@ -434,7 +435,7 @@ class FootballCoachBot:
         if status == 'new_user':
             # First-time user - show welcome and course selection
             reply_markup = await self.create_course_selection_keyboard(user_id)
-            welcome_text = f"سلام {user_name}! 👋\n\n" + Config.WELCOME_MESSAGE
+            welcome_text = Config.WELCOME_MESSAGE
             
         elif status == 'payment_pending':
             # User has submitted payment, waiting for approval
@@ -446,7 +447,7 @@ class FootballCoachBot:
                 [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')]
             ]
             if admin_mode:
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
             reply_markup = InlineKeyboardMarkup(keyboard)
             welcome_text = f"سلام {user_name}! 👋\n\n⏳ پرداخت شما برای دوره **{course_name}** در انتظار تایید است.\n\nمی‌توانید وضعیت پرداخت خود را بررسی کنید:"
             
@@ -471,10 +472,15 @@ class FootballCoachBot:
                 ]
                 
                 if admin_mode:
-                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
                 
                 # Enhanced welcome message showing completion status and purchased courses
-                nutrition_info = """
+                nutrition_info = ""
+                
+                # Only show nutrition info if user purchased nutrition plan
+                purchased_courses = await self.get_user_purchased_courses(user_id)
+                if 'nutrition_plan' in purchased_courses:
+                    nutrition_info = """
 
 🥗 برنامه غذایی شخصی‌سازی شده
 
@@ -495,17 +501,65 @@ class FootballCoachBot:
                 else:
                     welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
             else:
-                # Questionnaire not completed
+                # Questionnaire not completed - automatically start questionnaire
                 current_step = questionnaire_status.get('current_step', 1)
-                total_steps = questionnaire_status.get('total_steps', 17)
-                keyboard = [
-                    [InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')],
-                    [InlineKeyboardButton("🔄 شروع مجدد پرسشنامه", callback_data='restart_questionnaire')],
-                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')]
-                ]
-                if admin_mode:
-                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
-                welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
+                total_steps = questionnaire_status.get('total_steps', 21)
+                
+                # Check if questionnaire is already started
+                if current_step > 1:
+                    # Resume existing questionnaire
+                    current_question = await self.questionnaire_manager.get_current_question(user_id)
+                    if current_question:
+                        # Show current question directly
+                        progress_text = f"سوال {current_step} از {total_steps}"
+                        message = f"{progress_text}\n\n{current_question['text']}"
+                        
+                        keyboard = []
+                        if current_question.get('type') == 'choice':
+                            choices = current_question.get('choices', [])
+                            for choice in choices:
+                                keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                        
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n\n{message}"
+                    else:
+                        # Fallback to continue button if question not found
+                        keyboard = [
+                            [InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')]
+                        ]
+                        if admin_mode:
+                            keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
+                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                else:
+                    # Start fresh questionnaire
+                    first_question = self.questionnaire_manager.get_question(1, {})
+                    if first_question:
+                        # Initialize questionnaire for user
+                        await self.questionnaire_manager.start_questionnaire(user_id)
+                        
+                        progress_text = "سوال 1 از 21"
+                        message = f"{progress_text}\n\n{first_question['text']}"
+                        
+                        keyboard = []
+                        if first_question.get('type') == 'choice':
+                            choices = first_question.get('choices', [])
+                            for choice in choices:
+                                keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                        
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n\n📝 حالا وقت تکمیل پرسشنامه است!\n\n{message}"
+                    else:
+                        # Fallback if first question not found
+                        keyboard = [
+                            [InlineKeyboardButton("📝 شروع پرسشنامه", callback_data='start_questionnaire')]
+                        ]
+                        if admin_mode:
+                            keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
+                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 برای دریافت برنامه تمرینی، لطفاً پرسشنامه را تکمیل کنید:"
+                        reply_markup = InlineKeyboardMarkup(keyboard)
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -519,7 +573,7 @@ class FootballCoachBot:
                 [InlineKeyboardButton("🔄 دوره جدید", callback_data='new_course')]
             ]
             if admin_mode:
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_start')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
             reply_markup = InlineKeyboardMarkup(keyboard)
             welcome_text = f"سلام {user_name}! 👋\n\n❌ متاسفانه پرداخت شما برای دوره **{course_name}** تایید نشد.\n\nمی‌توانید مجدداً پرداخت کنید یا با پشتیبانی تماس بگیرید:"
             
@@ -531,16 +585,42 @@ class FootballCoachBot:
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')]
             ]
             if admin_mode:
-                additional_buttons.append([InlineKeyboardButton("� بازگشت به منوی ادمین", callback_data='admin_back_start')])
+                additional_buttons.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
             
             keyboard = list(course_keyboard.inline_keyboard) + additional_buttons
             reply_markup = InlineKeyboardMarkup(keyboard)
             welcome_text = f"سلام {user_name}! 👋\n\nخوش برگشتی! چه کاری می‌تونم برات انجام بدم؟"
         
         if hasattr(update, 'message') and update.message:
-            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup)
         else:
-            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup)
+    
+    async def show_admin_hub_for_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+        """Show the unified admin hub when admin uses /start command"""
+        is_super = await self.admin_panel.admin_manager.is_super_admin(user_id)
+        can_manage_admins = await self.admin_panel.admin_manager.can_add_admins(user_id)
+        user_name = update.effective_user.first_name or "ادمین"
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 آمار و گزارشات", callback_data='admin_stats'),
+             InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
+             InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
+            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
+        ]
+        
+        if can_manage_admins:
+            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+        
+        keyboard.append([InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
+        welcome_text = f"🎛️ پنل مدیریت\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
+        
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
     
     async def get_user_status(self, user_data: dict) -> str:
         """Determine user's current status based on their data"""
@@ -606,7 +686,8 @@ class FootballCoachBot:
         if user_id is None:
             keyboard = [
                 [InlineKeyboardButton("1️⃣ دوره تمرین حضوری", callback_data='in_person')],
-                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')]
+                [InlineKeyboardButton("2️⃣ دوره تمرین آنلاین", callback_data='online')],
+                [InlineKeyboardButton("3️⃣ برنامه غذایی", callback_data='nutrition_plan')]
             ]
         else:
             # Get purchased courses to add tick marks only for specific purchased courses
@@ -614,83 +695,19 @@ class FootballCoachBot:
             
             in_person_text = "1️⃣ دوره تمرین حضوری"
             online_text = "2️⃣ دوره تمرین آنلاین"
+            nutrition_text = "3️⃣ برنامه غذایی"
             
-            # Only add checkmark if user has ANY purchased course
-            # The specific course checkmark will be shown in subcategories
-            # We don't add ✅ here anymore since it should only appear for specific purchased courses
+            # Add checkmarks for purchased courses
+            if 'nutrition_plan' in purchased_courses:
+                nutrition_text += " ✅"
             
             keyboard = [
                 [InlineKeyboardButton(in_person_text, callback_data='in_person')],
-                [InlineKeyboardButton(online_text, callback_data='online')]
+                [InlineKeyboardButton(online_text, callback_data='online')],
+                [InlineKeyboardButton(nutrition_text, callback_data='nutrition_plan')]
             ]
         
         return InlineKeyboardMarkup(keyboard)
-
-    async def show_admin_start_menu(self, update: Update, user_name: str, user_id: int) -> None:
-        """Show streamlined start menu for admins"""
-        is_super = await self.admin_panel.admin_manager.is_super_admin(user_id)
-        can_manage_admins = await self.admin_panel.admin_manager.can_add_admins(user_id)
-        
-        keyboard = [
-            [InlineKeyboardButton("🎛️ پنل مدیریت کامل", callback_data='admin_panel_main')],
-            [InlineKeyboardButton("📊 آمار سریع", callback_data='admin_quick_stats'),
-             InlineKeyboardButton("💳 پرداخت‌های معلق", callback_data='admin_pending_payments')],
-            [InlineKeyboardButton("👥 کاربران جدید", callback_data='admin_new_users'),
-             InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')]
-        ]
-        
-        # Add admin management for those with permission
-        if can_manage_admins:
-            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
-        welcome_text = f"سلام {user_name}! 👋\n\n{admin_type} عزیز، به ربات مربی فوتبال خوش آمدید 🎛️\n\nانتخاب کنید:"
-        
-        if hasattr(update, 'message') and update.message:
-            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
-
-    async def handle_admin_start_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle admin start menu callbacks"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = update.effective_user.id
-        
-        if not await self.admin_panel.admin_manager.is_admin(user_id):
-            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
-            return
-        
-        if query.data == 'admin_panel_main':
-            # Redirect to full admin panel
-            await self.admin_panel.admin_menu_callback(query)
-        elif query.data == 'admin_quick_stats':
-            await self.admin_panel.show_quick_statistics(query)
-        elif query.data == 'admin_pending_payments':
-            await self.admin_panel.show_pending_payments(query)
-        elif query.data == 'admin_new_users':
-            await self.admin_panel.show_new_users(query)
-        elif query.data == 'admin_manage_admins':
-            await self.admin_panel.show_admin_management(query, user_id)
-        elif query.data == 'admin_payments_detailed':
-            await self.admin_panel.show_payments_detailed_list(query)
-        elif query.data == 'admin_quick_approve':
-            await self.handle_quick_approve_all(query)
-        elif query.data == 'admin_user_mode':
-            # Show regular user interface
-            user_data = await self.data_manager.get_user_data(user_id)
-            user_data['user_id'] = user_id  # Ensure user_id is set
-            user_name = update.effective_user.first_name or "ادمین"
-            # Use the consolidated function with admin_mode=True
-            await self.show_status_based_menu(update, user_data, user_name, admin_mode=True)
-        elif query.data == 'admin_back_start':
-            # Return to admin start menu
-            await self.admin_panel.back_to_admin_start(query, user_id)
-
-
 
     async def handle_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle main menu selections"""
@@ -717,7 +734,7 @@ class FootballCoachBot:
             keyboard = [
                 [InlineKeyboardButton(cardio_text, callback_data='in_person_cardio')],
                 [InlineKeyboardButton(weights_text, callback_data='in_person_weights')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
@@ -742,10 +759,14 @@ class FootballCoachBot:
                 [InlineKeyboardButton(weights_text, callback_data='online_weights')],
                 [InlineKeyboardButton(cardio_text, callback_data='online_cardio')],
                 [InlineKeyboardButton(combo_text, callback_data='online_combo')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
+            
+        elif query.data == 'nutrition_plan':
+            # Handle nutrition plan selection directly
+            await self.handle_course_details(update, context)
 
     async def handle_course_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle detailed course information"""
@@ -774,10 +795,19 @@ class FootballCoachBot:
             
             keyboard = [
                 [InlineKeyboardButton(f"💳 پرداخت و ثبت نام ({price_text})", callback_data=f'payment_{query.data}')],
-                [InlineKeyboardButton("🏷️ کد تخفیف دارم", callback_data=f'coupon_{query.data}')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'back_to_{"online" if query.data.startswith("online") else "in_person"}')],
-                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_main')]
+                [InlineKeyboardButton("🏷️ کد تخفیف دارم", callback_data=f'coupon_{query.data}')]
             ]
+            
+            # Add appropriate back button based on course type
+            if query.data == 'nutrition_plan':
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')])
+            elif query.data.startswith('online'):
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به دوره‌های آنلاین", callback_data='back_to_online')])
+            elif query.data.startswith('in_person'):
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به دوره‌های حضوری", callback_data='back_to_in_person')])
+                
+            keyboard.append([InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(message_text, reply_markup=reply_markup)
 
@@ -898,7 +928,7 @@ class FootballCoachBot:
                 "📋 اگر پرسشنامه را تکمیل نکرده‌اید، لطفاً تکمیل کنید.\n"
                 "📞 برای سوالات بیشتر با پشتیبانی تماس بگیرید.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                    [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
                 ])
             )
             return
@@ -911,7 +941,7 @@ class FootballCoachBot:
                 "📱 از نتیجه بررسی مطلع خواهید شد.\n\n"
                 "💡 اگر نیاز به پرداخت مجدد دارید، ابتدا با پشتیبانی تماس بگیرید.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                    [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
                 ])
             )
             return
@@ -1038,7 +1068,7 @@ class FootballCoachBot:
                         continue
                     
                     # Validate course type
-                    valid_courses = ['in_person_weights', 'in_person_cardio', 'online_weights', 'online_cardio', 'online_combo']
+                    valid_courses = ['in_person_weights', 'in_person_cardio', 'online_weights', 'online_cardio', 'online_combo', 'nutrition_plan']
                     if course_selected and course_selected not in valid_courses:
                         errors.append(f"سطر {row_num}: نوع دوره نامعتبر: {course_selected}")
                         continue
@@ -1104,7 +1134,7 @@ class FootballCoachBot:
                         continue
                     
                     # Validate course type
-                    valid_courses = ['in_person_weights', 'in_person_cardio', 'online_weights', 'online_cardio', 'online_combo']
+                    valid_courses = ['in_person_weights', 'in_person_cardio', 'online_weights', 'online_cardio', 'online_combo', 'nutrition_plan']
                     if course_type not in valid_courses:
                         errors.append(f"سطر {row_num}: نوع دوره نامعتبر: {course_type}")
                         continue
@@ -1178,9 +1208,9 @@ class FootballCoachBot:
                 choices = question.get('choices', [])
                 for choice in choices:
                     keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
             else:
-                keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(intro_message, reply_markup=reply_markup)
@@ -1231,18 +1261,31 @@ class FootballCoachBot:
         # Format prices properly
         final_price_text = Config.format_price(final_price)
         
-        payment_message = f"""🥗 برنامه غذایی شخصی‌سازی شده
+        # Special message for nutrition plan
+        if course_type == 'nutrition_plan':
+            payment_message = f"""🥗 برنامه غذایی شخصی‌سازی شده
 
-با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده برای بازیکنان حرفه ای فوتبال تهیه می‌شود.
+با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده تهیه می‌شود.
+
+برای دریافت برنامه غذایی، لطفاً روی لینک زیر کلیک کنید:
+
+👈 https://fitava.ir/coach/drbohloul/question
 
 ✨ این برنامه شامل:
 • برنامه غذایی کامل بر اساس نیازهای شما
 • راهنمایی تخصصی تغذیه ورزشی
 • پیگیری و تنظیم برنامه
+❌توجه داشته باشید همه فیلدهای فرم رو پر کنید وبرای قسمت اعداد، کیورد اعداد انگلیسی رو وارد کنید 
 
-واریزی رو انجام دادی فیش رو  همینجا ارسال میکنی میریم توی کارش🤝😊💎
+برای پرداخت به شماره کارت زیر واریز کنید:
 
-🔙 برای بازگشت به منوی اصلی، دکمه زیر را فشار دهید.
+💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}
+👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
+💰 مبلغ: {final_price_text}"""
+        else:
+            # Generic payment message for other courses
+            course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'دوره انتخابی')
+            payment_message = f"""📚 {course_title}
 
 برای پرداخت به شماره کارت زیر واریز کنید:
 
@@ -1266,8 +1309,16 @@ class FootballCoachBot:
 
 ⚠️ توجه: فقط فیش واریز رو ارسال کنید"""
         
+        # Add contextual back button based on course type
+        if course_type == 'nutrition_plan':
+            back_button_text = "🔙 بازگشت به انتخاب دوره"
+            back_callback = 'back_to_course_selection'
+        else:
+            back_button_text = "🔙 بازگشت به منو اصلی"
+            back_callback = 'back_to_user_menu'
+            
         keyboard = [
-            [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_user_menu')]
+            [InlineKeyboardButton(back_button_text, callback_data=back_callback)]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1291,39 +1342,50 @@ class FootballCoachBot:
                 "لطفاً یک عکس ارسال کنید (نه فایل یا متن)."
             )
             return
-        
-        # Check if user is in questionnaire mode and current question expects a photo
-        current_question = await self.questionnaire_manager.get_current_question(user_id)
-        if current_question and current_question.get("type") == "photo":
-            # Handle questionnaire photo
-            await self.handle_questionnaire_photo(update, context)
-            return
-        
-        # Check user's payment status from database
+
+        # Get user data FIRST to check payment status
         user_data = await self.data_manager.get_user_data(user_id)
         payment_status = user_data.get('payment_status')
         course_selected = user_data.get('course_selected')
         
-        # Only accept photos if user has selected a course but hasn't submitted receipt yet
+        logger.debug(f"📊 User {user_id} photo routing - payment_status: {payment_status}, course: {course_selected}")
+
+        # PRIORITY 1: If user has approved payment, handle questionnaire flow
+        if payment_status == 'approved':
+            # Check if current question expects a photo
+            current_question = await self.questionnaire_manager.get_current_question(user_id)
+            if current_question and current_question.get("type") == "photo":
+                logger.debug(f"🎯 Routing to questionnaire photo handler for user {user_id}")
+                await self.handle_questionnaire_photo(update, context)
+                return
+            else:
+                # User sent photo but current question doesn't expect it
+                logger.debug(f"⚠️ User {user_id} sent photo but current question is not photo type")
+                questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
+                current_step = questionnaire_status.get('current_step', 1)
+                
+                await update.message.reply_text(
+                    f"✅ پرداخت شما تایید شده است!\n\n"
+                    f"📝 شما در حال حاضر در مرحله {current_step} پرسشنامه هستید.\n"
+                    f"این مرحله نیاز به عکس ندارد.\n\n"
+                    f"لطفاً به سوال جاری پاسخ دهید یا از /start استفاده کنید."
+                )
+                return
+        
+        # PRIORITY 2: If no course selected, ask user to select course first
         if not course_selected:
             await update.message.reply_text(
                 "❌ ابتدا یک دوره انتخاب کنید!\n\n"
                 "برای شروع /start را بزنید."
             )
             return
-        
-        # If payment is already submitted or approved/rejected, don't accept more photos
+
+        # PRIORITY 3: Handle different payment states
         if payment_status == 'pending_approval':
             await update.message.reply_text(
                 "✅ فیش واریز شما قبلاً دریافت شده است!\n\n"
                 "⏳ در حال بررسی توسط ادمین...\n"
                 "📱 از وضعیت پرداخت مطلع خواهید شد."
-            )
-            return
-        elif payment_status == 'approved':
-            await update.message.reply_text(
-                "✅ پرداخت شما قبلاً تایید شده است!\n\n"
-                "📋 لطفا پرسشنامه را تکمیل کنید."
             )
             return
         elif payment_status == 'rejected':
@@ -1332,6 +1394,9 @@ class FootballCoachBot:
                 "📞 لطفا با پشتیبانی تماس بگیرید."
             )
             return
+
+        # PRIORITY 4: Handle NEW payment receipt submission
+        logger.debug(f"💳 Processing new payment receipt for user {user_id}")
         
         # Validate photo size and format
         photo = update.message.photo[-1]  # Get highest resolution
@@ -1354,7 +1419,7 @@ class FootballCoachBot:
             )
             return
         
-        course_type = course_selected  # Get from user_data instead of payment_pending
+        course_type = course_selected
         
         try:
             # Log payment receipt submission
@@ -1425,72 +1490,62 @@ class FootballCoachBot:
             )
 
     async def handle_questionnaire_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle photo submission for questionnaire question 18"""
+        """Handle photo submission for questionnaire questions"""
         user_id = update.effective_user.id
         
         try:
             # Get the photo
             photo = update.message.photo[-1]  # Get highest resolution
             
-            # Validate photo using ImageProcessor
-            if not self.image_processor.validate_image(photo):
+            # Basic validation
+            if photo.file_size and photo.file_size > 20 * 1024 * 1024:  # 20MB
                 await update.message.reply_text(
-                    "❌ تصویر ارسالی معتبر نیست!\n\n"
-                    "شرایط تصویر:\n"
-                    "📏 حداقل ابعاد: ۲۰۰×۲۰۰ پیکسل\n"
-                    "📦 حداکثر حجم: ۲۰ مگابایت\n"
-                    "🖼️ فرمت: JPG, PNG, WebP\n\n"
-                    "لطفاً تصویر مناسب‌تری ارسال کنید."
+                    "❌ تصویر خیلی بزرگ است!\n\n"
+                    "حداکثر سایز مجاز: ۲۰ مگابایت\n"
+                    "لطفاً تصویر کوچک‌تری ارسال کنید."
                 )
                 return
             
-            # Process and compress the image
-            file = await context.bot.get_file(photo.file_id)
-            file_path = f"temp_{user_id}_{photo.file_id}.jpg"
-            
-            # Download the file
-            await file.download_to_drive(file_path)
-            
-            try:
-                # Compress the image
-                compressed_path, compression_info = await self.image_processor.compress_image(file_path)
-                
-                # Save to database
-                await self.database_manager.save_user_image(
-                    user_id=user_id,
-                    question_number=18,
-                    file_id=photo.file_id,
-                    original_size=compression_info['original_size'],
-                    compressed_size=compression_info['compressed_size'],
-                    compression_ratio=compression_info['compression_ratio']
-                )
-                
-                # Clean up temp files
-                os.remove(file_path)
-                if os.path.exists(compressed_path):
-                    os.remove(compressed_path)
-                
+            # Check minimum dimensions
+            if photo.width < 200 or photo.height < 200:
                 await update.message.reply_text(
-                    "✅ تصویر شما با موفقیت دریافت و پردازش شد!\n\n"
-                    f"📊 اطلاعات پردازش:\n"
-                    f"📏 ابعاد: {photo.width}×{photo.height}\n"
-                    f"📦 حجم اصلی: {compression_info['original_size'] // 1024} KB\n"
-                    f"📦 حجم فشرده: {compression_info['compressed_size'] // 1024} KB\n"
-                    f"🗜️ نرخ فشرده‌سازی: {compression_info['compression_ratio']:.1f}%\n\n"
-                    "⏭️ بریم سوال بعدی..."
+                    "❌ تصویر خیلی کوچک است!\n\n"
+                    "حداقل ابعاد مورد نیاز: ۲۰۰×۲۰۰ پیکسل\n"
+                    "لطفاً تصویر با کیفیت بهتر ارسال کنید."
                 )
-                
-                # Progress to next question
-                await self.questionnaire_manager.save_answer(user_id, "photo_received")
-                await self.questionnaire_manager.send_next_question(user_id, context)
-                
-            except Exception as process_error:
-                # Clean up temp file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                raise process_error
+                return
+            
+            # Process the photo through questionnaire manager
+            result = await self.questionnaire_manager.process_photo_answer(user_id, photo.file_id)
+            
+            if result["status"] == "error":
+                await update.message.reply_text(result["message"])
+                return
+            elif result["status"] == "need_more_photos":
+                await update.message.reply_text(result["message"])
+                return
+            elif result["status"] == "next_question":
+                # Send confirmation and next question
+                await update.message.reply_text("✅ عکس دریافت شد!")
+                await self.questionnaire_manager.send_question(
+                    context.bot,
+                    user_id,
+                    result["question"]
+                )
+                return
+            elif result["status"] == "completed":
+                # Questionnaire completed
+                await self.handle_questionnaire_completion(update, context)
+                return
+            else:
+                await update.message.reply_text("❌ خطا در پردازش عکس!")
                 
         except Exception as e:
+            logger.error(f"Error processing questionnaire photo for user {user_id}: {e}")
+            await update.message.reply_text(
+                "❌ خطا در پردازش تصویر!\n\n"
+                "لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."
+            )
             logger.error(f"Error processing questionnaire photo: {e}")
             await update.message.reply_text(
                 "❌ خطا در پردازش تصویر!\n\n"
@@ -1499,8 +1554,8 @@ class FootballCoachBot:
                 f"کد خطا: {str(e)[:50]}"
             )
 
-    async def handle_unsupported_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle non-photo file uploads with helpful error messages"""
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle document uploads (PDF files for questionnaire, CSV for admin)"""
         user_id = update.effective_user.id
         
         # Check if it's a CSV file and user is admin
@@ -1513,6 +1568,78 @@ class FootballCoachBot:
         # Check if user is in questionnaire mode
         current_question = await self.questionnaire_manager.get_current_question(user_id)
         
+        if current_question:
+            question_type = current_question.get("type")
+            
+            if question_type == "photo":
+                await update.message.reply_text(
+                    "❌ فقط عکس قابل ارسال است!\n\n"
+                    "💡 راهنمای ارسال عکس:\n"
+                    "1️⃣ در گالری گوشی عکس مورد نظر را انتخاب کنید\n"
+                    "2️⃣ روی گزینه 'ارسال به عنوان عکس' کلیک کنید\n"
+                    "3️⃣ از ارسال به عنوان 'فایل' خودداری کنید\n\n"
+                    "📸 فرمت‌های مجاز: JPG, PNG, WebP\n"
+                    "⚠️ ارسال عکس به عنوان فایل پذیرفته نمی‌شود"
+                )
+                return
+            elif question_type == "text_or_document":
+                # Handle PDF documents for training program questions
+                if update.message.document:
+                    document = update.message.document
+                    filename = document.file_name or ""
+                    
+                    # Check if it's a PDF file
+                    if filename.lower().endswith('.pdf'):
+                        try:
+                            # Process the document
+                            result = await self.questionnaire_manager.process_document_answer(
+                                user_id, 
+                                document.file_id, 
+                                filename
+                            )
+                            
+                            if result["status"] == "next_question":
+                                # Send next question
+                                await self.questionnaire_manager.send_question(
+                                    context.bot, 
+                                    user_id, 
+                                    result["question"]
+                                )
+                            elif result["status"] == "completed":
+                                await self.handle_questionnaire_completion(update, context)
+                            else:
+                                await update.message.reply_text(result.get("message", "خطا در پردازش فایل"))
+                                
+                        except Exception as e:
+                            logger.error(f"Error processing document for user {user_id}: {e}")
+                            await update.message.reply_text(
+                                "❌ خطا در پردازش فایل!\n\n"
+                                "می‌توانید متن پاسخ خود را بنویسید یا فایل PDF دیگری ارسال کنید."
+                            )
+                        return
+                    else:
+                        await update.message.reply_text(
+                            "❌ فقط فایل‌های PDF قابل قبول هستند!\n\n"
+                            "💡 می‌توانید:\n"
+                            "📝 متن پاسخ خود را بنویسید\n"
+                            "📄 یا فایل PDF ارسال کنید"
+                        )
+                        return
+                        
+        # Handle other document types
+        await update.message.reply_text(
+            "❌ نوع فایل پشتیبانی نمی‌شود!\n\n"
+            "📝 می‌توانید پاسخ خود را به صورت متن بنویسید\n"
+            "📸 یا در صورت نیاز عکس ارسال کنید"
+        )
+
+    async def handle_unsupported_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle non-document file uploads (video, audio, etc.)"""
+        user_id = update.effective_user.id
+        
+        # Check if user is in questionnaire mode
+        current_question = await self.questionnaire_manager.get_current_question(user_id)
+        
         if current_question and current_question.get("type") == "photo":
             await update.message.reply_text(
                 "❌ فقط عکس قابل ارسال است!\n\n"
@@ -1521,31 +1648,16 @@ class FootballCoachBot:
                 "2️⃣ روی گزینه 'ارسال به عنوان عکس' کلیک کنید\n"
                 "3️⃣ از ارسال به عنوان 'فایل' خودداری کنید\n\n"
                 "📸 فرمت‌های مجاز: JPG, PNG, WebP\n"
-                "📏 حداقل اندازه: ۲۰۰×۲۰۰ پیکسل"
+                "⚠️ ارسال عکس به عنوان فایل پذیرفته نمی‌شود"
             )
-        elif user_id in self.payment_pending:
-            await update.message.reply_text(
-                "❌ فقط عکس فیش واریز قابل ارسال است!\n\n"
-                "💡 نحوه ارسال صحیح:\n"
-                "1️⃣ عکس فیش واریز را از گالری انتخاب کنید\n"
-                "2️⃣ حتماً به عنوان 'عکس' ارسال کنید (نه فایل)\n"
-                "3️⃣ از وضوح و خوانایی فیش اطمینان حاصل کنید\n\n"
-                "📋 اطلاعات مورد نیاز در فیش:\n"
-                "• شماره کارت مقصد\n"
-                "• مبلغ واریزی\n"
-                "• تاریخ و ساعت تراکنش\n"
-                "• شماره پیگیری"
-            )
-        else:
-            await update.message.reply_text(
-                "❌ نوع فایل ارسالی پشتیبانی نمی‌شود!\n\n"
-                "✅ فایل‌های قابل قبول:\n"
-                "📸 تصاویر: JPG, PNG, WebP\n\n"
-                "💡 برای ارسال عکس:\n"
-                "• از گالری گوشی عکس را انتخاب کنید\n"
-                "• حتماً به عنوان 'عکس' ارسال کنید\n\n"
-                "❓ اگر سوالی دارید /help را بزنید"
-            )
+            return
+            
+        # For other file types
+        await update.message.reply_text(
+            "❌ نوع فایل پشتیبانی نمی‌شود!\n\n"
+            "📝 می‌توانید پاسخ خود را به صورت متن بنویسید\n"
+            "📸 یا در صورت نیاز عکس ارسال کنید"
+        )
 
     async def handle_payment_approval(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle admin payment approval/rejection and user profile viewing"""
@@ -1553,19 +1665,27 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        logger.info(f"Payment approval attempt by user {user_id}")
+        admin_name = update.effective_user.first_name or "Unknown Admin"
+        
+        # Log admin action attempt
+        logger.info(f"🔧 Payment approval attempt by admin {user_id} ({admin_name})")
+        admin_logger.info(f"Payment approval attempt by admin {user_id} ({admin_name}) - Data: {query.data}")
         
         # Check if user is admin
         is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
-        logger.info(f"Admin check result for user {user_id}: {is_admin}")
         
         if not is_admin:
+            logger.warning(f"⚠️ Non-admin user {user_id} ({admin_name}) attempted payment approval")
+            admin_logger.warning(f"Non-admin user {user_id} ({admin_name}) attempted payment approval - BLOCKED")
             await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
             return
+        
+        logger.info(f"✅ Admin access confirmed for user {user_id} ({admin_name})")
         
         # Handle user profile viewing
         if query.data.startswith('view_user_'):
             target_user_id = int(query.data.replace('view_user_', ''))
+            admin_logger.info(f"Admin {user_id} ({admin_name}) viewing profile of user {target_user_id}")
             await self.show_user_profile(query, target_user_id)
             return
         
@@ -1610,12 +1730,24 @@ class FootballCoachBot:
                 await query.edit_message_text("❌ نوع دوره برای این کاربر مشخص نیست.")
                 return
             
+            # Log the approval action
+            course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
+            price = user_payment.get('price', 0)
+            
+            admin_logger.info(f"💳 PAYMENT APPROVED by admin {user_id} ({admin_name})")
+            admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
+            admin_logger.info(f"   Course: {course_title} ({course_type})")
+            admin_logger.info(f"   Amount: {Config.format_price(price)}")
+            admin_logger.info(f"   Payment ID: {payment_id}")
+            
             # Update payment status in payments table
             user_payment['status'] = 'approved'
             user_payment['approved_by'] = update.effective_user.id
             user_payment['approved_at'] = datetime.now().isoformat()
             payments_data[payment_id] = user_payment
             await self.data_manager.save_data('payments', payments_data)
+            
+            logger.info(f"✅ Payment data updated for user {target_user_id}")
             
             # Update user data
             await self.data_manager.save_user_data(target_user_id, {
@@ -1624,6 +1756,8 @@ class FootballCoachBot:
                 'course': course_type,
                 'payment_status': 'approved'
             })
+            
+            logger.info(f"✅ User data updated for user {target_user_id}")
             
             # Update statistics
             await self.data_manager.update_statistics('total_payments')
@@ -1634,52 +1768,103 @@ class FootballCoachBot:
             if target_user_id in self.payment_pending:
                 del self.payment_pending[target_user_id]
             
-            # Notify user and start questionnaire
+            # Notify user and start questionnaire automatically
+            logger.info(f"🚀 Starting automatic questionnaire notification for user {target_user_id}")
+            admin_logger.info(f"🚀 Sending automatic questionnaire to user {target_user_id}")
+            
+            notification_sent = False
+            notification_error = None
+            
             try:
-                # First, notify the user about approval
-                await query.bot.send_message(
-                    chat_id=target_user_id,
-                    text="✅ پرداخت شما تایید شد! \n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:"
-                )
-                
-                # Then, start the questionnaire
-                logger.info(f"Starting questionnaire for user {target_user_id}")
+                # Get first question to start questionnaire immediately
+                logger.debug(f"📝 Starting questionnaire for user {target_user_id}")
                 await self.questionnaire_manager.start_questionnaire(target_user_id)
                 
-                # Get and send the first question
-                question = await self.questionnaire_manager.get_current_question(target_user_id)
-                if question:
-                    await self.questionnaire_manager.send_question(query.bot, target_user_id, question)
-                    logger.info(f"Successfully started questionnaire for user {target_user_id}")
-                else:
-                    logger.error(f"Failed to get first question for user {target_user_id}")
-                    # Send fallback message
-                    await query.bot.send_message(
+                logger.debug(f"📋 Getting first question for user {target_user_id}")
+                first_question = await self.questionnaire_manager.get_current_question(target_user_id)
+                
+                if first_question:
+                    # Send approval message with first question directly
+                    progress_text = "سوال 1 از 21"
+                    message = f"✅ پرداخت شما تایید شد!\n\n📝 حالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:\n\n{progress_text}\n\n{first_question['text']}"
+                    
+                    keyboard = []
+                    if first_question.get('type') == 'choice':
+                        choices = first_question.get('choices', [])
+                        for choice in choices:
+                            keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    logger.info(f"📤 Sending questionnaire message to user {target_user_id}")
+                    admin_logger.info(f"📤 Sending questionnaire with first question to user {target_user_id}")
+                    
+                    await context.bot.send_message(
                         chat_id=target_user_id,
-                        text="✅ پرداخت تایید شد! برای ادامه از دستور /start استفاده کنید."
+                        text=message,
+                        reply_markup=reply_markup
                     )
+                    
+                    notification_sent = True
+                    logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id} - First question delivered")
+                    
+                else:
+                    # Fallback to button if question not found
+                    logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
+                    admin_logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
+                    
+                    keyboard = [[InlineKeyboardButton("🎯 شروع پرسشنامه", callback_data='start_questionnaire')]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text="✅ پرداخت شما تایید شد!\n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:",
+                        reply_markup=reply_markup
+                    )
+                    
+                    notification_sent = True
+                    logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id} - Button to start questionnaire")
                 
             except Exception as e:
-                logger.error(f"Failed to notify/start questionnaire for user {target_user_id}: {e}")
+                notification_error = str(e)
+                logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
+                admin_logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
+                
                 # Try to at least notify them of approval
                 try:
-                    await query.bot.send_message(
+                    logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
+                    admin_logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
+                    
+                    await context.bot.send_message(
                         chat_id=target_user_id,
                         text="✅ پرداخت شما تایید شد! برای ادامه از دستور /start استفاده کنید."
                     )
+                    
+                    notification_sent = True
+                    logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
+                    
                 except Exception as e2:
-                    logger.error(f"Failed to send even basic approval message to user {target_user_id}: {e2}")
+                    notification_error = f"{e} | Fallback also failed: {e2}"
+                    logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
+                    admin_logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
+            
+            # Final notification status log
+            if notification_sent:
+                admin_logger.info(f"🎉 PAYMENT APPROVAL COMPLETE: User {target_user_id} notified successfully")
+            else:
+                admin_logger.error(f"🚨 PAYMENT APPROVAL INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
             
             # Update admin message
-            course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص') if course_type else 'نامشخص'
-            price = user_payment.get('price', 0)
-            
             updated_message = f"""✅ پرداخت تایید شد:
 👤 کاربر: {user_data.get('name', 'ناشناس')}
 🆔 User ID: {target_user_id}
 📚 دوره: {course_title}
 💰 مبلغ: {Config.format_price(price)}
-⏰ تایید شده توسط: {update.effective_user.first_name}"""
+⏰ تایید شده توسط: {admin_name}
+📧 اطلاع‌رسانی: {'✅ موفق' if notification_sent else '❌ ناموفق'}"""
             
             # Edit caption for photo messages, text for text messages
             try:
@@ -1700,29 +1885,56 @@ class FootballCoachBot:
             )
             
         elif action == 'reject':
+            # Log the rejection action
+            admin_logger.info(f"❌ PAYMENT REJECTED by admin {user_id} ({admin_name})")
+            admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
+            admin_logger.info(f"   Course: {user_data.get('course_selected', 'Unknown')}")
+            
             # Reject payment
             await self.data_manager.save_user_data(target_user_id, {
                 'payment_status': 'rejected'
             })
+            
+            logger.info(f"✅ Payment rejected for user {target_user_id}")
             
             # Remove from pending payments
             if target_user_id in self.payment_pending:
                 del self.payment_pending[target_user_id]
             
             # Notify user
+            notification_sent = False
+            notification_error = None
+            
             try:
-                await query.bot.send_message(
+                logger.info(f"📤 Sending rejection notification to user {target_user_id}")
+                admin_logger.info(f"📤 Sending rejection notification to user {target_user_id}")
+                
+                await context.bot.send_message(
                     chat_id=target_user_id,
                     text="❌ متاسفانه پرداخت شما تایید نشد. لطفا با پشتیبانی تماس بگیرید یا فیش صحیح را ارسال کنید."
                 )
+                
+                notification_sent = True
+                logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
+                admin_logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
+                
             except Exception as e:
-                logger.error(f"Failed to notify user {target_user_id}: {e}")
+                notification_error = str(e)
+                logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
+                admin_logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
+            
+            # Final notification status log
+            if notification_sent:
+                admin_logger.info(f"🎉 PAYMENT REJECTION COMPLETE: User {target_user_id} notified successfully")
+            else:
+                admin_logger.error(f"🚨 PAYMENT REJECTION INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
             
             # Update admin message
             updated_message = f"""❌ پرداخت رد شد:
 👤 کاربر: {user_data.get('name', 'ناشناس')}
 🆔 User ID: {target_user_id}
-⏰ رد شده توسط: {update.effective_user.first_name}"""
+⏰ رد شده توسط: {admin_name}
+📧 اطلاع‌رسانی: {'✅ موفق' if notification_sent else '❌ ناموفق'}"""
             
             # Edit caption for photo messages, text for text messages
             try:
@@ -1751,7 +1963,7 @@ class FootballCoachBot:
             
             # Get user info from Telegram
             try:
-                chat_member = await query.bot.get_chat(target_user_id)
+                chat_member = await context.bot.get_chat(target_user_id)
                 telegram_name = chat_member.first_name
                 username = f"@{chat_member.username}" if chat_member.username else "ندارد"
             except:
@@ -1891,9 +2103,9 @@ class FootballCoachBot:
                 choices = question.get('choices', [])
                 for choice in choices:
                     keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
             else:
-                keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(message, reply_markup=reply_markup)
@@ -2012,9 +2224,9 @@ class FootballCoachBot:
                 choices = question.get('choices', [])
                 for choice in choices:
                     keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
             else:
-                keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(message, reply_markup=reply_markup)
@@ -2032,18 +2244,18 @@ class FootballCoachBot:
         
         completion_message = """🎉 تبریک! پرسشنامه با موفقیت تکمیل شد
 
-اطلاعات شما ذخیره شد و حالا می‌تونیم بهترین برنامه تمرینی رو برای شما طراحی کنیم!
+✅ اطلاعات شما ثبت شد و در حال آماده‌سازی برنامه تمرینی شخصی‌سازی شده شما هستیم.
 
-حالا وقت پرداخته! 💳"""
+🔄 لطفاً منتظر بمانید تا یکی از مربیان ما با شما تماس بگیرد.
+
+⏰ معمولاً تا چند ساعت آینده برنامه کاملتان آماده خواهد شد.
+
+📞 اگر سوالی دارید، از طریق پشتیبانی ربات با ما در ارتباط باشید."""
         
         # Edit the message to show completion
         await query.edit_message_text(completion_message)
         
-        # Wait a moment and then show payment details
-        await asyncio.sleep(2)
-        
-        if course_type:
-            await self.show_payment_details(update, context, course_type)
+        # Completion - no further action needed as user has already paid
 
     async def complete_questionnaire_from_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle questionnaire completion from text message"""
@@ -2054,20 +2266,18 @@ class FootballCoachBot:
         
         completion_message = """🎉 تبریک! پرسشنامه با موفقیت تکمیل شد
 
-اطلاعات شما ذخیره شد و حالا می‌تونیم بهترین برنامه تمرینی رو برای شما طراحی کنیم!
+✅ اطلاعات شما ثبت شد و در حال آماده‌سازی برنامه تمرینی شخصی‌سازی شده شما هستیم.
 
-حالا وقت پرداخته! 💳"""
+🔄 لطفاً منتظر بمانید تا یکی از مربیان ما با شما تماس بگیرد.
+
+⏰ معمولاً تا چند ساعت آینده برنامه کاملتان آماده خواهد شد.
+
+📞 اگر سوالی دارید، از طریق پشتیبانی ربات با ما در ارتباط باشید."""
         
         # Send completion message
         await update.message.reply_text(completion_message)
         
-        # Wait a moment and then show payment details
-        await asyncio.sleep(2)
-        
-        if course_type:
-            # Create a mock update for payment details
-            mock_update = update
-            await self.show_payment_details(mock_update, context, course_type)
+        # Completion - no further action needed as user has already paid
 
     async def start_questionnaire_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start questionnaire directly from callback"""
@@ -2099,9 +2309,9 @@ class FootballCoachBot:
                 choices = question.get('choices', [])
                 for choice in choices:
                     keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
             else:
-                keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]]
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(message, reply_markup=reply_markup)
@@ -2119,7 +2329,7 @@ class FootballCoachBot:
         user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
         
         # Use the same unified menu system as /start command
-        await self.show_status_based_menu(update, user_data, user_name)
+        await self.show_status_based_menu(update, context, user_data, user_name)
 
     async def back_to_user_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Return to appropriate user menu based on their current status"""
@@ -2132,7 +2342,15 @@ class FootballCoachBot:
         user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
         
         # Show status-based menu (this handles editing automatically)
-        await self.show_status_based_menu(update, user_data, user_name)
+        await self.show_status_based_menu(update, context, user_data, user_name)
+
+    async def back_to_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Return to course category selection (online/in_person)"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Show the course selection interface
+        await self.start_new_course_selection(update, context)
 
     async def back_to_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle back navigation to course categories (online/in_person)"""
@@ -2143,21 +2361,7 @@ class FootballCoachBot:
         
         # Extract category from callback data
         if query.data == 'back_to_online':
-            # Simulate clicking 'online' to show online courses
-            query.data = 'online'
-            await self.handle_main_menu(update, context)
-        elif query.data == 'back_to_in_person':
-            # Simulate clicking 'in_person' to show in-person courses  
-            query.data = 'in_person'
-            await self.handle_main_menu(update, context)
-        course_type = query.data.replace('back_to_', '')  # 'online' or 'in_person'
-        
-        # Simulate the original selection to show the course list
-        # Create a mock update with the course type
-        user_id = update.effective_user.id
-        
-        if course_type == 'online':
-            # Show online courses
+            # Show online courses directly
             purchased_courses = await self.get_user_purchased_courses(user_id)
             
             weights_text = "1️⃣ برنامه وزنه"
@@ -2175,13 +2379,13 @@ class FootballCoachBot:
                 [InlineKeyboardButton(weights_text, callback_data='online_weights')],
                 [InlineKeyboardButton(cardio_text, callback_data='online_cardio')],
                 [InlineKeyboardButton(combo_text, callback_data='online_combo')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
             
-        elif course_type == 'in_person':
-            # Show in-person courses
+        elif query.data == 'back_to_in_person':
+            # Show in-person courses directly
             purchased_courses = await self.get_user_purchased_courses(user_id)
             
             cardio_text = "1️⃣ تمرین هوازی سرعتی چابکی کار با توپ"
@@ -2195,7 +2399,7 @@ class FootballCoachBot:
             keyboard = [
                 [InlineKeyboardButton(cardio_text, callback_data='in_person_cardio')],
                 [InlineKeyboardButton(weights_text, callback_data='in_person_weights')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_main')]
+                [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
@@ -2240,8 +2444,9 @@ class FootballCoachBot:
             
             # Create course selection keyboard
             course_keyboard = await self.create_course_selection_keyboard(user_id)
-            # Add status button to the existing keyboard
+            # Add back button and status button to the existing keyboard
             keyboard = list(course_keyboard.inline_keyboard) + [
+                [InlineKeyboardButton("🔙 بازگشت به منو اصلی", callback_data='back_to_user_menu')],
                 [InlineKeyboardButton("📊 وضعیت فعلی", callback_data='my_status')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2441,7 +2646,7 @@ class FootballCoachBot:
         keyboard = [
             [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
             [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_main')]
+            [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -2556,7 +2761,7 @@ def main():
     application.add_handler(CommandHandler("remove_admin", bot.admin_panel.remove_admin_command))
     
     application.add_handler(CallbackQueryHandler(bot.handle_main_menu, pattern='^(in_person|online|nutrition_plan)$'))
-    application.add_handler(CallbackQueryHandler(bot.handle_course_details, pattern='^(in_person_cardio|in_person_weights|online_weights|online_cardio|online_combo)$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_course_details, pattern='^(in_person_cardio|in_person_weights|online_weights|online_cardio|online_combo|nutrition_plan)$'))
     application.add_handler(CallbackQueryHandler(bot.handle_payment, pattern='^payment_'))
     application.add_handler(CallbackQueryHandler(bot.handle_coupon_request, pattern='^coupon_'))
     application.add_handler(CallbackQueryHandler(bot.handle_questionnaire_choice, pattern='^q_answer_'))
@@ -2564,9 +2769,8 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_user_menu, pattern='^back_to_user_menu$'))
+    application.add_handler(CallbackQueryHandler(bot.back_to_course_selection, pattern='^back_to_course_selection$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_category, pattern='^back_to_(online|in_person)$'))
-    # Admin start menu handlers (must come before generic admin_ handler)
-    application.add_handler(CallbackQueryHandler(bot.handle_admin_start_callbacks, pattern='^(admin_panel_main|admin_quick_stats|admin_pending_payments|admin_new_users|admin_manage_admins|admin_user_mode|admin_back_start|admin_payments_detailed|admin_quick_approve|confirm_approve_all)$'))
     # Admin coupon handlers (must come before generic admin_ handler)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(toggle_coupon_|delete_coupon_)'))
     # Generic admin handlers (catch remaining admin_ callbacks)
@@ -2575,8 +2779,11 @@ def main():
     # Handle photo messages (payment receipts and questionnaire photos)
     application.add_handler(MessageHandler(filters.PHOTO, bot.handle_payment_receipt))
     
-    # Handle unsupported file types with helpful messages
-    application.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.VOICE | filters.ANIMATION, bot.handle_unsupported_file))
+    # Handle document uploads (PDF for questionnaire, CSV for admin)
+    application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_document))
+    
+    # Handle other unsupported file types
+    application.add_handler(MessageHandler(filters.VIDEO | filters.AUDIO | filters.VOICE | filters.ANIMATION, bot.handle_unsupported_file))
     
     # Handle text messages (questionnaire responses)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_questionnaire_response))

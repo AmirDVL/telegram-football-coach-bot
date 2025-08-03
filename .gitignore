@@ -1,117 +1,113 @@
-# 🔒 SENSITIVE DATA - NEVER COMMIT
+# 🤖 Telegram Football Coach Bot - .gitignore
+
+# 🔒 SENSITIVE DATA & CONFIGURATION
 .env
 *.env
+.env.local
+.env.production
+
+# 📊 DATA FILES (User data should not be committed)
 bot_data.json
 questionnaire_data.json
 admins.json
 coupons.json
+*.db
+*.sqlite*
 
-# 🧪 BACKUP SCRIPTS (Keep local only)
-backup_scripts/
-*_backup.py
-force_admin_sync.py
-env_diagnostic.py
-diagnose_env.py
-
-# 🗂️ PYTHON CACHE AND BUILD FILES
+# �️ PYTHON
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
 build/
 dist/
-*.egg-info/
-
-# 🧪 TEST AND DEBUG FILES
-test_*.py
-*_test.py
-!test_postgresql_compatibility.py
-# test_postgresql_compatibility.py is needed for testing, so do NOT ignore it
-debug_*.py
-clear_*.py
-fix_*.py
-restore_*.py
+*.egg
 
 # 📁 LOG FILES
 *.log
 logs/
+*.log.*
 
-# 💾 DATABASE FILES
-*.db
-*.sqlite
-*.sqlite3
-
-# 🔧 TEMPORARY SCRIPTS AND SETUP FILES
-add_admin.sql
-setup_database.sql
-bootstrap.sh
-deploy.sh
-deploy_production.sh
-deploy_shared_host.sh
-manage.sh
-quick_setup.sh
-security_hardening.sh
-security_setup.sh
-setup_debian.sh
-setup_postgres.ps1
-startup.sh
-update.sh
-run.bat
-setup.bat
-
-# 📚 EXCESSIVE DOCUMENTATION (keep only essential)
-ADMIN_COMMAND_SOLUTION.md
-ADMIN_SYSTEM_GUIDE.md
-COMPLETE_GUIDE.md
-DEPLOYMENT_CHECKLIST.md
-DEPLOYMENT_REFERENCE.md
-GITHUB_SETUP.md
-HOSTING_OPTIONS.md
-MIGRATION_GUIDE.md
-POSTGRESQL_TEST_RESULTS.md
-SECURITY_GUIDE.md
-test_status_system.md
-
-# 🔄 BACKUP FILES
-main_backup.py
-*_backup.py
+# 💾 BACKUPS & TEMPORARY FILES
 *.backup
 *.bak
+*_backup.*
+temp_*
+tmp_*
+
+# 🧪 DEVELOPMENT & DEBUG
+test_*.py
+*_test.py
+debug_*.py
+verify_*.py
+check_*.py
+audit_*.py
+fix_*.py
+clear_*.py
+reset_*.py
+*_temp.py
+simple_*.py
+
+# 🔧 DEPLOYMENT & SCRIPTS
 *.sh
-Deployment_Linux.md
-bot.txt
-.gitignore_new
+*.bat
+*.sql
+deploy*
+setup*
+bootstrap*
+manage*
 
-# 🤖 AI ASSISTANT AND TEMPORARY FILES
-*_with_old_method.py
-*_clean.py
-test_course_selection.py
-github_copilot_instructions.txt
-copilot_instructions.md
-ai_instructions.md
-.copilot/
+# 📚 EXCESSIVE DOCUMENTATION
+*_SUMMARY.md
+*_FIXES.md
+*_GUIDE.md
+*_ANALYSIS.md
+*_REPORT.md
+ADMIN_*.md
+CRITICAL_*.md
+ENHANCED_*.md
+NAVIGATION_*.md
+PHOTO_*.md
+POSTGRESQL_*.md
+NUTRITION_*.md
+MIGRATION_*.md
+SECURITY_*.md
+COMPLETE_*.md
+FINAL_*.md
+KEYERROR_*.md
 
-# 🛠️ DEVELOPMENT SECURITY MODULES (not needed in production)
-security_config.py
-security_integration.py
-security_monitor.py
-secure_database_manager.py
-
-# 💻 VSCODE SETTINGS
+# �️ EDITOR & IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# 🗃️ ESSENTIAL FILES TO KEEP:
+# 🖥️ OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# � Node.js (if any)
+node_modules/
+npm-debug.log*
+
+# 🎯 KEEP THESE ESSENTIAL FILES:
 # ✅ main.py - Core bot application
-# ✅ data_manager.py - Data management
-# ✅ questionnaire_manager.py - Questionnaire system  
-# ✅ admin_panel.py - Admin functionality
+# ✅ config.py - Configuration management
+# ✅ data_manager.py - Data operations
+# ✅ questionnaire_manager.py - Questionnaire system
+# ✅ admin_panel.py - Admin interface
 # ✅ admin_manager.py - Admin management
-# ✅ config.py - Configuration
-# ✅ image_processor.py - Image processing
 # ✅ coupon_manager.py - Coupon system
 # ✅ database_manager.py - Database operations
+# ✅ image_processor.py - Image handling
+# ✅ bot_logger.py - Logging system
 # ✅ requirements.txt - Dependencies
-# ✅ .env.example - Environment template
-# ✅ README.md - Main documentation
+# ✅ README.md - Project documentation
 # ✅ DEPLOYMENT_GUIDE.md - Deployment instructions
 # ✅ BOTFATHER_SETUP.md - Bot setup guide
+# ✅ FILE_STORAGE_DOCUMENTATION.md - File system docs
+# ✅ .env.example - Environment template
+# ✅ .github/ - GitHub workflows

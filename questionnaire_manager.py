@@ -66,15 +66,15 @@ class QuestionnaireManager:
                 "choices": ["بله", "خیر"]
             },
             10: {
-                "text": "📋 اگر تمرین هوازی داشتی، جزئیات برنامه تمرین هوازی رو برام بفرست:",
-                "type": "text",
+                "text": "📋 اگر تمرین هوازی داشتی، جزئیات برنامه تمرین هوازی رو برام بفرست (متن یا فایل PDF):",
+                "type": "text_or_document",
                 "emoji": "🏃",
                 "validation": {"min_length": 5, "max_length": 200},
                 "condition": {"step": 9, "answer": "بله"}
             },
             11: {
-                "text": "🏋️ اگر تمرین وزنه داشتی، جزئیات برنامه وزنه‌ات رو برام بفرست:",
-                "type": "text",
+                "text": "🏋️ اگر تمرین وزنه داشتی، جزئیات برنامه وزنه‌ات رو برام بفرست (متن یا فایل PDF):",
+                "type": "text_or_document",
                 "emoji": "🏋️‍♂️",
                 "validation": {"min_length": 5, "max_length": 200},
                 "condition": {"step": 9, "answer": "بله"}
@@ -116,7 +116,7 @@ class QuestionnaireManager:
                 "validation": {"min_length": 5, "max_length": 150}
             },
             18: {
-                "text": "� عکس از جلو، بغل و پشت برام بفرست برای آنالیز.\n\n⚠️ لطفاً سه عکس جداگانه ارسال کنید: یکی از جلو، یکی از پهلو و یکی از پشت.",
+                "text": "📷 عکس از جلو، بغل و پشت برام بفرست برای آنالیز.\n\n⚠️ لطفاً سه عکس جداگانه ارسال کنید: یکی از جلو، یکی از پهلو و یکی از پشت.",
                 "type": "photo",
                 "emoji": "📷",
                 "photo_count": 3,
@@ -130,9 +130,9 @@ class QuestionnaireManager:
             },
             20: {
                 "text": "📱 کدوم شبکه‌های اجتماعی رو بیشتر استفاده می‌کنی؟",
-                "type": "multichoice",
+                "type": "text",
                 "emoji": "📲",
-                "choices": ["اینستاگرام", "تلگرام", "یوتیوب", "فیسبوک", "توییتر", "هیچ‌کدام"]
+                "validation": {"min_length": 2, "max_length": 100}
             },
             21: {
                 "text": "📞 خب، شماره‌ات رو هم بنویس!\n(برای هماهنگی‌های ضروری نیاز داریم)\n\n(مثال: 09123456789)",
@@ -192,6 +192,9 @@ class QuestionnaireManager:
             return None
         
         question = self.questions[step].copy()
+        
+        # Add progress text
+        question["progress_text"] = f"سوال {step} از 21"
         
         # Replace placeholders in question text
         if user_answers and "name" in user_answers:
@@ -271,6 +274,15 @@ class QuestionnaireManager:
                     return False, f"گزینه '{choice}' نامعتبر است"
             return True, ""
 
+        elif question["type"] == "text_or_document":
+            # For text_or_document type, text validation applies
+            validation = question.get("validation", {})
+            if "min_length" in validation and len(answer) < validation["min_length"]:
+                return False, f"حداقل {validation['min_length']} کاراکتر وارد کنید"
+            if "max_length" in validation and len(answer) > validation["max_length"]:
+                return False, f"حداکثر {validation['max_length']} کاراکتر مجاز است"
+            return True, ""
+
         elif question["type"] == "photo":
             # Photo validation is handled separately in photo handler
             return True, ""
@@ -340,13 +352,13 @@ class QuestionnaireManager:
         """Get completion message when questionnaire is finished"""
         return """🎉 عالی! پرسشنامه تکمیل شد!
 
-✅ اطلاعات شما با موفقیت ثبت شد
-📊 بر اساس پاسخ‌هایت، برنامه تمرینی شخصی‌سازی شده‌ای آماده می‌کنم
-⏰ تا چند ساعت آینده برنامه کاملت رو دریافت خواهی کرد
+✅ اطلاعات شما با موفقیت ثبت شد و در حال آماده‌سازی برنامه تمرینی شخصی‌سازی شده شما هستیم.
 
-� آماده‌ای تا بهترین ورژن خودت بشی؟
+🔄 لطفاً منتظر بمانید تا یکی از مربیان ما با شما تماس بگیرد.
 
-📞 اگر سوالی داری، با پشتیبانی در ارتباط باش."""
+⏰ معمولاً تا چند ساعت آینده برنامه کاملتان آماده خواهد شد.
+
+📞 اگر سوالی دارید، از طریق پشتیبانی ربات با ما در ارتباط باشید."""
 
     async def get_user_summary(self, user_id: int) -> Optional[str]:
         """Get formatted summary of user's answers"""
@@ -608,6 +620,121 @@ class QuestionnaireManager:
         # Check if we have enough photos for this question
         photo_count = question.get("photo_count", 1)
         current_photos = len(progress["answers"]["photos"][str(current_step)])
+        
+        # Save progress after adding photo
+        await self.save_user_progress(user_id, progress)
+        
+        if current_photos < photo_count:
+            # Need more photos
+            remaining = photo_count - current_photos
+            return {
+                "status": "need_more_photos",
+                "message": f"✅ عکس دریافت شد! ({current_photos}/{photo_count})\n\n📸 لطفاً {remaining} عکس دیگر ارسال کنید.",
+                "current_step": current_step,
+                "photos_received": current_photos,
+                "photos_needed": photo_count
+            }
+        
+        # We have enough photos, move to next step
+        progress["answers"][str(current_step)] = f"تصاویر ارسال شد ({photo_count} عکس)"
+        progress["last_updated"] = datetime.now().isoformat()
+        
+        # Determine next step
+        next_step = current_step + 1
+        
+        # Skip conditional questions if needed
+        while next_step <= 21:
+            next_question = self.get_question(next_step, progress["answers"])
+            if next_question is not None:
+                break
+            next_step += 1
+        
+        if next_step > 21:
+            # Questionnaire completed
+            progress["completed"] = True
+            progress["completed_at"] = datetime.now().isoformat()
+            await self.save_user_progress(user_id, progress)
+            
+            return {
+                "status": "completed",
+                "message": self.get_completion_message(),
+                "current_step": 21,
+                "total_steps": 21,
+                "completed": True
+            }
+        else:
+            # Move to next step
+            progress["current_step"] = next_step
+            await self.save_user_progress(user_id, progress)
+            
+            next_question = self.get_question(next_step, progress["answers"])
+            return {
+                "status": "next_question",
+                "question": next_question,
+                "current_step": next_step,
+                "total_steps": 21,
+                "completed": False
+            }
+    async def process_document_answer(self, user_id: int, document_file_id: str, document_name: str = "") -> Dict[str, Any]:
+        """Process document answer for questionnaire"""
+        progress = await self.load_user_progress(user_id)
+        if not progress:
+            return {
+                "status": "error", 
+                "message": "شما در حال پاسخ دادن به پرسشنامه نیستید.",
+                "current_step": 0
+            }
+            
+        current_step = progress["current_step"]
+        
+        # Check if current question accepts documents
+        question = self.questions.get(current_step)
+        if not question or question.get("type") not in ["text_or_document"]:
+            return {
+                "status": "error",
+                "message": "در حال حاضر فایل مورد نیاز نیست.",
+                "current_step": current_step
+            }
+        
+        # Save document information as the answer
+        document_answer = f"📎 فایل ارسال شده: {document_name or 'document'}"
+        
+        # Store both text answer and document file_id
+        progress["answers"][str(current_step)] = document_answer
+        
+        # Initialize documents array if it doesn't exist
+        if "documents" not in progress["answers"]:
+            progress["answers"]["documents"] = {}
+        progress["answers"]["documents"][str(current_step)] = {
+            "file_id": document_file_id,
+            "name": document_name or "document"
+        }
+        
+        # Move to next step
+        progress["current_step"] += 1
+        
+        # Save progress
+        await self.save_user_progress(user_id, progress)
+        
+        # Return next question or completion info
+        if progress["current_step"] <= 18:
+            next_question = await self.get_current_question(user_id)
+            return {
+                "status": "next_question",
+                "question": next_question,
+                "current_step": progress["current_step"],
+                "total_steps": 18,
+                "completed": False
+            }
+        else:
+            # Questionnaire completed
+            return {
+                "status": "completed",
+                "message": "پرسشنامه شما با موفقیت تکمیل شد!",
+                "current_step": 18,
+                "total_steps": 18,
+                "completed": True
+            }
         
         if current_photos < photo_count:
             # Need more photos
