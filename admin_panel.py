@@ -4,11 +4,21 @@ from admin_manager import AdminManager
 from data_manager import DataManager
 from coupon_manager import CouponManager
 from config import Config
+from admin_error_handler import admin_error_handler
+from admin_debugger import admin_debugger
 import json
 import csv
 import io
 import os
+import zipfile
+import tempfile
+import shutil
+import traceback
 from datetime import datetime
+import logging
+
+# Setup logger for admin panel
+logger = logging.getLogger(__name__)
 
 class AdminPanel:
     def __init__(self):
@@ -29,89 +39,326 @@ class AdminPanel:
         await self.show_admin_hub_for_command(update, context, user_id)
     
     async def handle_admin_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle admin panel callbacks"""
+        """Handle admin panel callbacks with comprehensive error handling"""
         query = update.callback_query
-        await query.answer()
-        
         user_id = update.effective_user.id
         
-        if not await self.admin_manager.is_admin(user_id):
-            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
-            return
+        try:
+            await query.answer()
+            
+            # Log callback attempt for debugging
+            await admin_debugger.log_callback_attempt(
+                update, query.data, user_id, success=True
+            )
+            
+            # Log admin action
+            await admin_error_handler.log_admin_action(
+                user_id, f"callback_query", {"callback_data": query.data}
+            )
+            
+            if not await self.admin_manager.is_admin(user_id):
+                await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
+                return
+            
+            logger.info(f"Admin {user_id} triggered callback: {query.data}")
+            
+            # Main callback routing with comprehensive error handling
+            await self._route_admin_callback(query, context, user_id)
+            
+        except Exception as e:
+            # Log the error with full context
+            await admin_debugger.log_callback_attempt(
+                update, query.data, user_id, success=False, error=str(e)
+            )
+            
+            # Handle the error gracefully
+            error_handled = await admin_error_handler.handle_admin_error(
+                update, context, e, f"callback_query:{query.data}", user_id
+            )
+            
+            if not error_handled:
+                # If error handler couldn't handle it, send a basic error message
+                try:
+                    await query.edit_message_text(
+                        "❌ خطای غیرمنتظره رخ داد. لطفاً مجددا تلاش کنید.\n\n"
+                        "اگر مشکل ادامه دارد، دستور /admin را مجددا اجرا کنید."
+                    )
+                except Exception:
+                    pass  # Even error handling failed
+                
+                # Re-raise for logging at application level
+                raise e
+
+    async def _route_admin_callback(self, query, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+        """Route admin callbacks to appropriate handlers"""
+        callback_data = query.data
         
-        if query.data == 'admin_stats':
+        # Add debug logging for callback routing
+        logger.debug(f"Routing callback: {callback_data}")
+        
+        # Main admin menu callbacks
+        if callback_data == 'admin_stats':
             await self.show_statistics(query)
-        elif query.data == 'admin_users':
+        elif callback_data == 'admin_users':
             await self.show_users_management(query)
-        elif query.data == 'admin_payments':
+        elif callback_data == 'admin_payments':
             await self.show_payments_management(query)
-        elif query.data == 'admin_export_menu':
+        elif callback_data == 'admin_export_menu':
             await self.show_export_menu(query)
-        elif query.data == 'admin_coupons':
+        elif callback_data == 'admin_coupons':
             await self.show_coupon_management(query)
-        elif query.data == 'admin_export_users':
+        elif callback_data == 'admin_plans':
+            await self.show_plan_management(query)
+        elif callback_data == 'admin_debug':
+            await self.show_debug_panel(query, user_id)
+            
+        # Plan management callbacks - THIS IS THE FIX!
+        elif callback_data.startswith(('plan_course_', 'upload_plan_', 'send_plan_', 'view_plans_', 'send_to_user_', 'send_to_all_', 'view_plan_')):
+            logger.info(f"Routing plan management callback: {callback_data}")
+            await self.handle_plan_callback_routing(query, context)
+            
+        # Export callbacks
+        elif callback_data == 'admin_export_users':
             await self.export_users_csv(query)
-        elif query.data == 'admin_export_payments':
+        elif callback_data == 'admin_export_payments':
             await self.export_payments_csv(query)
-        elif query.data == 'admin_export_questionnaire':
+        elif callback_data == 'admin_export_questionnaire':
             await self.export_questionnaire_csv(query)
-        elif query.data == 'admin_export_person':
+        elif callback_data == 'admin_export_person':
             await self.show_completed_users_list(query)
-        elif query.data == 'admin_export_telegram':
+        elif callback_data == 'admin_export_telegram':
             await self.export_telegram_csv(query)
-        elif query.data == 'admin_export_all':
+        elif callback_data == 'admin_export_all':
             await self.export_all_data(query)
-        elif query.data == 'admin_template_users':
+        elif callback_data == 'admin_template_users':
             await self.generate_users_template(query)
-        elif query.data == 'admin_template_payments':
+        elif callback_data == 'admin_template_payments':
             await self.generate_payments_template(query)
-        elif query.data.startswith('export_user_'):
+        elif callback_data.startswith('export_user_'):
             # Handle user-specific export
-            user_id = query.data.replace('export_user_', '')
-            await self.export_user_personal_data(query, user_id)
-        elif query.data == 'admin_view_coupons':
+            export_user_id = callback_data.replace('export_user_', '')
+            await self.export_user_personal_data(query, export_user_id)
+        
+        # Coupon management callbacks
+        elif callback_data == 'admin_view_coupons':
             await self.show_coupons_list(query)
-        elif query.data == 'admin_create_coupon':
+        elif callback_data == 'admin_create_coupon':
             await self.handle_create_coupon(query, user_id)
-        elif query.data == 'admin_toggle_coupon':
+        elif callback_data == 'admin_toggle_coupon':
             await self.handle_toggle_coupon(query)
-        elif query.data == 'admin_delete_coupon':
+        elif callback_data == 'admin_delete_coupon':
             await self.handle_delete_coupon(query)
-        elif query.data == 'admin_manage_admins':
-            await self.show_admin_management(query, user_id)
-        elif query.data == 'admin_cleanup_non_env':
-            await self.handle_cleanup_non_env_admins(query, user_id)
-        elif query.data.startswith('admin_add_admin_'):
-            await self.handle_add_admin(query, user_id)
-        elif query.data.startswith('admin_remove_admin_'):
-            await self.handle_remove_admin(query, user_id)
-        elif query.data.startswith('toggle_coupon_'):
+        elif callback_data.startswith('toggle_coupon_'):
             await self.process_toggle_coupon(query)
-        elif query.data.startswith('delete_coupon_'):
+        elif callback_data.startswith('delete_coupon_'):
             await self.process_delete_coupon(query)
-        elif query.data == 'admin_back_main':
+        
+        # Admin management callbacks
+        elif callback_data == 'admin_manage_admins':
+            await self.show_admin_management(query, user_id)
+        elif callback_data == 'admin_cleanup_non_env':
+            await self.handle_cleanup_non_env_admins(query, user_id)
+        elif callback_data.startswith('admin_add_admin_'):
+            await self.handle_add_admin(query, user_id)
+        elif callback_data.startswith('admin_remove_admin_'):
+            await self.handle_remove_admin(query, user_id)
+        
+        # Navigation callbacks
+        elif callback_data == 'admin_back_main':
             await self.back_to_admin_main(query, user_id)
-        elif query.data == 'admin_back_start':
+        elif callback_data == 'admin_back_start':
             await self.back_to_admin_start(query, user_id)
-        elif query.data == 'admin_back_to_manage_admins':
-            await self.back_to_manage_admins(query, user_id)
-        elif query.data == 'admin_back_to_stats':
-            await self.back_to_stats_menu(query, user_id)
-        elif query.data == 'admin_back_to_users':
-            await self.back_to_users_menu(query, user_id)
-        elif query.data == 'admin_back_to_payments':
-            await self.back_to_payments_menu(query, user_id)
-        elif query.data == 'admin_back_to_export':
-            await self.back_to_export_menu(query, user_id)
-        elif query.data == 'admin_back_to_coupons':
-            await self.back_to_coupons_menu(query, user_id)
-        elif query.data == 'admin_menu':
-            # Fix: handle coupon menu back button
-            await self.admin_menu_callback(query)
+        
+        else:
+            # Unknown callback - log for debugging
+            logger.warning(f"Unknown admin callback: {callback_data}")
+            await admin_error_handler.log_admin_action(
+                user_id, "unknown_callback", {"callback_data": callback_data}
+            )
+            
+            # Provide helpful feedback
+            await query.edit_message_text(
+                f"⚠️ دستور ناشناخته: {callback_data}\n\n"
+                f"🔍 Debug Info:\n{admin_error_handler.get_callback_debug_info(callback_data)}\n\n"
+                f"🔄 بازگشت به منوی اصلی...",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 منوی اصلی", callback_data='admin_back_main')
+                ]])
+            )
+
+    async def show_debug_panel(self, query, admin_id: int):
+        """Show admin debug panel"""
+        try:
+            # Generate debug report
+            debug_report = await admin_debugger.create_debug_report(admin_id)
+            error_summary = await admin_error_handler.get_error_summary(admin_id, limit=5)
+            file_status = await admin_debugger.get_file_system_status()
+            callback_test = await admin_debugger.test_callback_routing()
+            
+            keyboard = [
+                [InlineKeyboardButton("🔍 تست کال‌بک", callback_data='admin_debug_test')],
+                [InlineKeyboardButton("📊 گزارش کامل", callback_data='admin_debug_full')],
+                [InlineKeyboardButton("🗑️ پاک کردن لاگ‌ها", callback_data='admin_debug_clear')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+            ]
+            
+            text = f"""🔍 پنل دیباگ ادمین
+            
+{error_summary}
+
+📁 وضعیت فایل‌ها:
+{file_status}
+
+🧪 تست کال‌بک:
+{callback_test[:500]}..."""
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, "show_debug_panel", admin_id
+            )
+    
+    async def handle_admin_user_mode(self, query, admin_id) -> None:
+        """Allow admin to test user interface without losing admin privileges"""
+        try:
+            await query.edit_message_text(
+                "🔄 تغییر به حالت کاربر...\n\n"
+                "شما اکنون رابط کاربری عادی را مشاهده می‌کنید.\n"
+                "برای بازگشت به پنل ادمین از /start استفاده کنید.",
+                reply_markup=None
+            )
+            
+            # Import here to avoid circular imports  
+            from main import FootballCoachBot
+            
+            # Create realistic mock objects
+            class MockUser:
+                def __init__(self, admin_id):
+                    self.id = admin_id
+                    self.first_name = "Admin"
+                    self.username = "admin_test_mode"
+                    self.is_bot = False
+            
+            class MockChat:
+                def __init__(self, admin_id):
+                    self.id = admin_id
+                    self.type = "private"
+            
+            class MockMessage:
+                def __init__(self, admin_id):
+                    self.message_id = 1
+                    self.date = None
+                    self.chat = MockChat(admin_id)
+                    self.from_user = MockUser(admin_id)
+                    self.text = "/start"
+                    
+                async def reply_text(self, text, reply_markup=None, parse_mode=None):
+                    # Send user interface to admin
+                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            
+            class MockUpdate:
+                def __init__(self, admin_id):
+                    self.message = MockMessage(admin_id)
+                    self.effective_user = MockUser(admin_id)
+                    self.effective_chat = MockChat(admin_id)
+                    self.callback_query = None
+                    
+            class MockContext:
+                def __init__(self):
+                    self.user_data = {}
+                    self.chat_data = {}
+                    self.bot_data = {}
+                    self.application = None
+                    self.bot = None
+            
+            # Show actual user interface with admin_mode bypass
+            mock_update = MockUpdate(admin_id)
+            mock_context = MockContext()
+            
+            # Create mock user data for a new user (empty data will trigger new_user status)
+            mock_user_data = {
+                'user_id': admin_id,
+                'name': 'Admin',
+                'username': 'admin_test_mode',
+                'started_bot': False  # This will make them appear as a new user
+            }
+            
+            bot = FootballCoachBot()
+            # Use show_status_based_menu directly with admin_mode=True to bypass admin check
+            await bot.show_status_based_menu(mock_update, mock_context, mock_user_data, "Admin", admin_mode=True)
+            
+        except Exception as e:
+            # Log the specific error
+            import traceback
+            error_msg = f"Error in admin user mode: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(traceback.format_exc())
+            
+            await query.message.reply_text(
+                f"❌ خطا در نمایش حالت کاربر:\n{str(e)}\n\n"
+                f"برای بازگشت به پنل ادمین از /start استفاده کنید."
+            )
     
     async def show_statistics(self, query) -> None:
         """Show bot statistics"""
         try:
+            # Load data from data_manager
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            users = data.get('users', {})
+            payments = data.get('payments', {})
+            stats = data.get('statistics', {})
+            
+            total_users = len(users)
+            total_payments = len(payments)
+            # Only count approved payments for revenue calculation
+            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
+            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
+            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
+            rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
+            
+            # Course statistics
+            course_stats = {}
+            for user_data in users.values():
+                course = user_data.get('course')
+                if course:
+                    course_stats[course] = course_stats.get(course, 0) + 1
+            
+            stats_text = "📊 آمار کلی ربات:\n\n"
+            stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
+            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments}\n"
+            stats_text += f"  ✅ تایید شده: {approved_payments}\n"
+            stats_text += f"  ⏳ در انتظار: {pending_payments}\n"
+            stats_text += f"  ❌ رد شده: {rejected_payments}\n"
+            stats_text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
+            stats_text += "📚 آمار دوره‌ها:"
+            
+            for course, count in course_stats.items():
+                course_name = {
+                    'online_weights': 'وزنه آنلاین',
+                    'online_cardio': 'هوازی آنلاین',
+                    'in_person_cardio': 'حضوری هوازی',
+                    'in_person_weights': 'حضوری وزنه',
+                    'online_combo': 'آنلاین ترکیبی',
+                    'nutrition_plan': 'برنامه تغذیه'
+                }.get(course, course)
+                stats_text += f"\n  • {course_name}: {count} نفر"
+            
+            keyboard = [
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(stats_text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در نمایش آمار: {str(e)}", 
+                                        reply_markup=InlineKeyboardMarkup([
+                                            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+                                        ]))
             # Load data from data_manager
             with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -404,7 +651,8 @@ class AdminPanel:
              InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
             [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
              InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
-            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
+            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons'),
+             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')]
         ]
         
         if can_manage_admins:
@@ -430,7 +678,9 @@ class AdminPanel:
              InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
             [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
              InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
-            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons')]
+            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons'),
+             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')],
+            [InlineKeyboardButton("🔍 پنل دیباگ", callback_data='admin_debug')]
         ]
         
         if can_manage_admins:
@@ -1076,6 +1326,23 @@ class AdminPanel:
                 'nutrition_plan': 'برنامه غذایی'
             }.get(course_type, course_type)
             
+            # Count photos and get their info
+            photo_count = 0
+            photo_files = []
+            if user_questionnaire.get('answers'):
+                for step, answer in user_questionnaire.get('answers', {}).items():
+                    if isinstance(answer, dict) and answer.get('type') == 'photo':
+                        photo_count += 1
+                        local_path = answer.get('local_path')
+                        file_ids = answer.get('file_ids', [])
+                        
+                        if local_path and os.path.exists(local_path):
+                            photo_files.append((step, local_path))
+                        elif file_ids:
+                            # For migrated photos without local storage, we'll note them
+                            # In a real bot environment, these could be downloaded using the file_ids
+                            photo_files.append((step, f"[File IDs: {len(file_ids)} photos - not locally stored]"))
+            
             # Create comprehensive user report
             report = f"""📋 گزارش کامل کاربر: {user_name}
 
@@ -1090,7 +1357,7 @@ class AdminPanel:
 • وضعیت: {'تکمیل شده' if user_questionnaire.get('completed') else 'تکمیل نشده'}
 • تاریخ تکمیل: {user_questionnaire.get('completion_timestamp', user_questionnaire.get('completed_at', 'نامشخص'))}
 
-📷 تصاویر پرسشنامه: {len([a for a in user_questionnaire.get('answers', {}).values() if isinstance(a, dict) and a.get('type') == 'photo'])}
+📷 تصاویر پرسشنامه: {photo_count} عکس
 📎 اسناد ارسالی: {len(user_data.get('documents', []))}
 
 """
@@ -1101,7 +1368,8 @@ class AdminPanel:
                 for step, answer in user_questionnaire.get('answers', {}).items():
                     if isinstance(answer, dict):
                         if answer.get('type') == 'photo':
-                            report += f"سوال {step}: [تصویر] {answer.get('file_path', 'مسیر نامشخص')}\n"
+                            local_path = answer.get('local_path', 'مسیر نامشخص')
+                            report += f"سوال {step}: [تصویر] {os.path.basename(local_path) if local_path != 'مسیر نامشخص' else 'فایل موجود نیست'}\n"
                         else:
                             report += f"سوال {step}: {answer.get('text', 'پاسخ نامشخص')}\n"
                     else:
@@ -1116,16 +1384,64 @@ class AdminPanel:
                     report += f"   📅 {doc.get('upload_date', 'نامشخص')}\n"
                     report += f"   📁 {doc.get('file_path', 'مسیر نامشخص')}\n\n"
             
-            # Send as text file
+            # Create temporary directory for zip file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"user_report_{user_id}_{timestamp}.txt"
             
-            await query.message.reply_document(
-                document=io.BytesIO(report.encode('utf-8')),
-                filename=filename,
-                caption=f"📤 گزارش کامل کاربر {user_name}\n\n"
-                       f"📅 تاریخ تولید: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
-            )
+            # Create zip file with report and photos
+            zip_filename = f"user_export_{user_id}_{timestamp}.zip"
+            temp_zip_path = os.path.join(tempfile.gettempdir(), zip_filename)
+            
+            with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add text report
+                report_filename = f"گزارش_{user_name}_{user_id}.txt"
+                zipf.writestr(report_filename, report.encode('utf-8'))
+                
+                # Add photos if they exist
+                photos_added = 0
+                photos_noted = 0
+                for step, photo_path in photo_files:
+                    try:
+                        if os.path.exists(photo_path):
+                            # Create a meaningful filename
+                            photo_extension = os.path.splitext(photo_path)[1]
+                            photo_name = f"تصویر_قدم_{step}{photo_extension}"
+                            zipf.write(photo_path, f"photos/{photo_name}")
+                            photos_added += 1
+                        elif "[File IDs:" in photo_path:
+                            # Note migrated photos that aren't locally stored
+                            note_content = f"Step {step}: {photo_path}\n"
+                            zipf.writestr(f"migrated_photos_step_{step}.txt", note_content.encode('utf-8'))
+                            photos_noted += 1
+                    except Exception as e:
+                        print(f"Error adding photo {photo_path}: {e}")
+                
+                # Add note about photos
+                if photos_added > 0 or photos_noted > 0:
+                    photo_note = f"📷 تصاویر در این بسته:\n"
+                    if photos_added > 0:
+                        photo_note += f"• {photos_added} تصویر محلی در پوشه photos\n"
+                    if photos_noted > 0:
+                        photo_note += f"• {photos_noted} تصویر قدیمی (فقط شناسه فایل - نیاز به دانلود مجدد)\n"
+                    if photos_added < photo_count:
+                        photo_note += f"⚠️ {photo_count - photos_added - photos_noted} تصویر به دلیل عدم دسترسی، اضافه نشد.\n"
+                    zipf.writestr("راهنمای_تصاویر.txt", photo_note.encode('utf-8'))
+            
+            # Send the zip file
+            with open(temp_zip_path, 'rb') as zip_file:
+                await query.message.reply_document(
+                    document=zip_file,
+                    filename=zip_filename,
+                    caption=f"📤 گزارش کامل کاربر {user_name}\n\n"
+                           f"📋 شامل: گزارش متنی + {photos_added} تصویر محلی"
+                           f"{f' + {photos_noted} تصویر قدیمی' if photos_noted > 0 else ''}\n"
+                           f"📅 تاریخ تولید: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                )
+            
+            # Clean up temporary file
+            try:
+                os.unlink(temp_zip_path)
+            except:
+                pass
             
             keyboard = [
                 [InlineKeyboardButton("🔙 بازگشت به لیست", callback_data='admin_export_person')],
@@ -1135,12 +1451,15 @@ class AdminPanel:
             
             await query.edit_message_text(
                 f"✅ گزارش کامل {user_name} ارسال شد!\n\n"
-                f"📋 شامل: اطلاعات شخصی، پاسخ‌های پرسشنامه، مسیر تصاویر و اسناد",
+                f"📋 شامل: اطلاعات شخصی، پاسخ‌های پرسشنامه\n"
+                f"📷 تصاویر: {photos_added} فایل محلی"
+                f"{f', {photos_noted} فایل قدیمی' if photos_noted > 0 else ''}",
                 reply_markup=reply_markup
             )
             
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در تولید گزارش: {str(e)}")
+            print(f"Export error: {e}")  # For debugging
 
     async def export_all_data(self, query) -> None:
         """Export complete database as JSON with admin-friendly format"""
@@ -1516,4 +1835,305 @@ class AdminPanel:
         
         keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_coupons')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    # =====================================
+    # PLAN MANAGEMENT SYSTEM
+    # =====================================
+    
+    async def show_plan_management(self, query) -> None:
+        """Show the plan management main menu"""
+        await query.answer()
+        
+        course_types = {
+            'online_weights': '🏋️ وزنه آنلاین',
+            'online_cardio': '🏃 هوازی آنلاین',
+            'online_combo': '💪 ترکیبی آنلاین',
+            'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+        }
+        
+        keyboard = []
+        for course_code, course_name in course_types.items():
+            keyboard.append([InlineKeyboardButton(f"📋 {course_name}", callback_data=f'plan_course_{course_code}')])
+        
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت به پنل اصلی", callback_data='admin_back_main')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = """📋 مدیریت برنامه‌های تمرینی
+
+یکی از دوره‌ها را انتخاب کنید تا برنامه‌های آن را مدیریت کنید:
+
+💡 برای هر دوره می‌توانید:
+• برنامه‌های موجود را مشاهده کنید
+• برنامه جدید آپلود کنید
+• برنامه‌های قدیمی را ویرایش کنید
+• برنامه‌ها را برای کاربران ارسال کنید"""
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def show_course_plan_management(self, query, course_type: str) -> None:
+        """Show plan management for a specific course with error handling"""
+        try:
+            await query.answer()
+            
+            await admin_error_handler.log_admin_action(
+                query.from_user.id, "view_course_plans", {"course_type": course_type}
+            )
+            
+            course_names = {
+                'online_weights': '🏋️ وزنه آنلاین',
+                'online_cardio': '🏃 هوازی آنلاین', 
+                'online_combo': '💪 ترکیبی آنلاین',
+                'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+            }
+            
+            course_name = course_names.get(course_type, course_type)
+            
+            # Load existing plans for this course
+            plans = await self.load_course_plans(course_type)
+            
+            keyboard = [
+                [InlineKeyboardButton("📤 آپلود برنامه جدید", callback_data=f'upload_plan_{course_type}')],
+                [InlineKeyboardButton("👥 ارسال برنامه به کاربران", callback_data=f'send_plan_{course_type}')]
+            ]
+            
+            if plans:
+                keyboard.append([InlineKeyboardButton("📋 مشاهده برنامه‌های موجود", callback_data=f'view_plans_{course_type}')])
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_plans')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            plan_count = len(plans)
+            text = f"""📋 مدیریت برنامه‌های {course_name}
+
+📊 تعداد برنامه‌های موجود: {plan_count}
+
+💡 امکانات:
+• آپلود برنامه جدید (PDF, تصویر، متن)
+• ارسال برنامه‌ها به کاربران خاص
+• مشاهده و ویرایش برنامه‌های موجود
+• حذف برنامه‌های قدیمی"""
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"show_course_plan_management:{course_type}", query.from_user.id
+            )
+
+    async def load_course_plans(self, course_type: str) -> list:
+        """Load plans for a specific course type"""
+        try:
+            plans_file = f'course_plans_{course_type}.json'
+            if os.path.exists(plans_file):
+                with open(plans_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return []
+        except Exception as e:
+            print(f"Error loading plans for {course_type}: {e}")
+            return []
+
+    async def save_course_plans(self, course_type: str, plans: list) -> bool:
+        """Save plans for a specific course type"""
+        try:
+            plans_file = f'course_plans_{course_type}.json'
+            with open(plans_file, 'w', encoding='utf-8') as f:
+                json.dump(plans, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error saving plans for {course_type}: {e}")
+            return False
+
+    async def handle_plan_upload(self, query, course_type: str, context=None) -> None:
+        """Handle plan upload request"""
+        await query.answer()
+        
+        course_names = {
+            'online_weights': '🏋️ وزنه آنلاین',
+            'online_cardio': '🏃 هوازی آنلاین',
+            'online_combo': '💪 ترکیبی آنلاین', 
+            'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+        }
+        
+        course_name = course_names.get(course_type, course_type)
+        user_id = query.from_user.id
+        
+        # Set upload state in context if available
+        if context:
+            if user_id not in context.user_data:
+                context.user_data[user_id] = {}
+            context.user_data[user_id]['uploading_plan'] = True
+            context.user_data[user_id]['plan_course_type'] = course_type
+            context.user_data[user_id]['plan_upload_step'] = 'title'
+        
+        text = f"""📤 آپلود برنامه جدید برای {course_name}
+
+📋 فرمت‌های قابل قبول:
+• فایل PDF
+• تصاویر (JPG, PNG)
+• متن (فایل متنی یا پیام)
+
+💡 نحوه آپلود:
+1️⃣ عنوان برنامه را بنویسید
+2️⃣ فایل یا تصویر برنامه را ارسال کنید
+3️⃣ توضیحات اضافی (اختیاری)
+
+⏳ لطفاً ابتدا عنوان برنامه را بنویسید:"""
+        
+        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data=f'plan_course_{course_type}')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def handle_plan_callback_routing(self, query, context=None) -> None:
+        """Route plan-related callbacks with error handling"""
+        try:
+            await admin_error_handler.log_admin_action(
+                query.from_user.id, "plan_callback", {"callback_data": query.data}
+            )
+            
+            logger.info(f"Handling plan callback: {query.data}")
+            
+            if query.data.startswith('plan_course_'):
+                course_type = query.data.replace('plan_course_', '')
+                await self.show_course_plan_management(query, course_type)
+            elif query.data.startswith('upload_plan_'):
+                course_type = query.data.replace('upload_plan_', '')
+                await self.handle_plan_upload(query, course_type, context)
+            elif query.data.startswith('send_plan_'):
+                course_type = query.data.replace('send_plan_', '')
+                await self.handle_send_plan_to_users(query, course_type)
+            elif query.data.startswith('view_plans_'):
+                course_type = query.data.replace('view_plans_', '')
+                await self.show_existing_plans(query, course_type)
+            else:
+                logger.warning(f"Unhandled plan callback: {query.data}")
+                await query.edit_message_text(
+                    f"⚠️ دستور برنامه ناشناخته: {query.data}\n\n"
+                    "🔄 بازگشت به مدیریت برنامه‌ها...",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 مدیریت برنامه‌ها", callback_data='admin_plans')
+                    ]])
+                )
+                
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, context, e, f"plan_callback_routing:{query.data}", query.from_user.id
+            )
+
+    async def handle_send_plan_to_users(self, query, course_type: str) -> None:
+        """Handle sending plans to specific users"""
+        await query.answer()
+        
+        course_names = {
+            'online_weights': '🏋️ وزنه آنلاین',
+            'online_cardio': '🏃 هوازی آنلاین',
+            'online_combo': '💪 ترکیبی آنلاین',
+            'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+        }
+        
+        course_name = course_names.get(course_type, course_type)
+        
+        # Get users who have purchased this course
+        users_with_course = await self.get_users_with_course(course_type)
+        
+        if not users_with_course:
+            text = f"❌ هیچ کاربری برای دوره {course_name} یافت نشد!"
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data=f'plan_course_{course_type}')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            return
+        
+        keyboard = []
+        for user_info in users_with_course[:10]:  # Show first 10 users
+            user_id = user_info['user_id']
+            user_name = user_info.get('name', 'بدون نام')
+            keyboard.append([InlineKeyboardButton(f"👤 {user_name} ({user_id})", callback_data=f'send_to_user_{course_type}_{user_id}')])
+        
+        keyboard.append([InlineKeyboardButton("📤 ارسال به همه", callback_data=f'send_to_all_{course_type}')])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f'plan_course_{course_type}')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = f"""👥 ارسال برنامه به کاربران {course_name}
+
+📊 تعداد کاربران: {len(users_with_course)} نفر
+
+💡 انتخاب کنید:
+• ارسال به کاربر خاص
+• ارسال به همه کاربران این دوره
+
+⚠️ نکته: ابتدا برنامه مورد نظر را آپلود کنید"""
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def get_users_with_course(self, course_type: str) -> list:
+        """Get list of users who have purchased a specific course"""
+        try:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            users_with_course = []
+            users = data.get('users', {})
+            payments = data.get('payments', {})
+            
+            # Find users with approved payments for this course
+            for payment_id, payment_data in payments.items():
+                if (payment_data.get('course_type') == course_type and 
+                    payment_data.get('status') == 'approved'):
+                    user_id = payment_data.get('user_id')
+                    if user_id and str(user_id) in users:
+                        user_info = users[str(user_id)].copy()
+                        user_info['user_id'] = user_id
+                        users_with_course.append(user_info)
+            
+            return users_with_course
+        except Exception as e:
+            print(f"Error getting users with course {course_type}: {e}")
+            return []
+
+    async def show_existing_plans(self, query, course_type: str) -> None:
+        """Show existing plans for a course"""
+        await query.answer()
+        
+        plans = await self.load_course_plans(course_type)
+        
+        if not plans:
+            text = "❌ هیچ برنامه‌ای برای این دوره یافت نشد!"
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data=f'plan_course_{course_type}')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            return
+        
+        keyboard = []
+        for i, plan in enumerate(plans[:10]):  # Show first 10 plans
+            plan_title = plan.get('title', f'برنامه {i+1}')
+            keyboard.append([InlineKeyboardButton(f"📋 {plan_title}", callback_data=f'view_plan_{course_type}_{i}')])
+        
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f'plan_course_{course_type}')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        course_names = {
+            'online_weights': '🏋️ وزنه آنلاین',
+            'online_cardio': '🏃 هوازی آنلاین',
+            'online_combo': '💪 ترکیبی آنلاین',
+            'in_person_cardio': '🏃‍♂️ هوازی حضوری', 
+            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+        }
+        
+        course_name = course_names.get(course_type, course_type)
+        
+        text = f"""📋 برنامه‌های موجود برای {course_name}
+
+📊 تعداد: {len(plans)} برنامه
+
+💡 روی هر برنامه کلیک کنید تا جزئیات آن را مشاهده کرده و بتوانید آن را ویرایش یا حذف کنید."""
+        
         await query.edit_message_text(text, reply_markup=reply_markup)

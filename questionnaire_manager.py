@@ -1,8 +1,11 @@
 import json
 import os
+import logging
 from typing import Dict, Any, Optional
 import aiofiles
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class QuestionnaireManager:
     def __init__(self, data_file='questionnaire_data.json'):
@@ -284,8 +287,8 @@ class QuestionnaireManager:
             return True, ""
 
         elif question["type"] == "photo":
-            # Photo validation is handled separately in photo handler
-            return True, ""
+            # Photo questions should only accept photos, not text
+            return False, "📷 این سوال نیاز به ارسال تصویر دارد. لطفاً عکس ارسال کنید، نه متن."
 
         return True, ""
 
@@ -587,8 +590,8 @@ class QuestionnaireManager:
             print(f"Error resetting questionnaire: {e}")
             return False
 
-    async def process_photo_answer(self, user_id: int, photo_file_id: str) -> Dict[str, Any]:
-        """Process photo answer for questionnaire"""
+    async def process_photo_answer(self, user_id: int, photo_file_id: str, bot=None) -> Dict[str, Any]:
+        """Process photo answer for questionnaire and download it locally"""
         progress = await self.load_user_progress(user_id)
         if not progress:
             return {
@@ -608,14 +611,51 @@ class QuestionnaireManager:
                 "current_step": current_step
             }
         
+        # Download and save photo locally if bot is provided
+        local_photo_path = None
+        if bot:
+            try:
+                # Create user photo directory
+                user_photo_dir = f"questionnaire_photos/user_{user_id}/step_{current_step}"
+                os.makedirs(user_photo_dir, exist_ok=True)
+                
+                # Download photo from Telegram
+                file = await bot.get_file(photo_file_id)
+                photo_bytes = await file.download_as_bytearray()
+                
+                # Generate unique filename
+                import time
+                timestamp = int(time.time())
+                filename = f"photo_{timestamp}_{len(progress['answers'].get('photos', {}).get(str(current_step), []))}.jpg"
+                
+                # Use image processor to compress and save
+                from image_processor import ImageProcessor
+                image_processor = ImageProcessor()
+                local_photo_path = await image_processor.save_compressed_image(
+                    bytes(photo_bytes), 
+                    filename, 
+                    user_photo_dir
+                )
+                
+                logger.info(f"Photo saved locally: {local_photo_path} for user {user_id}, step {current_step}")
+                
+            except Exception as e:
+                logger.error(f"Error downloading/saving photo: {e}")
+                # Continue without local save - still store file_id
+        
         # Initialize photos array if it doesn't exist
         if "photos" not in progress["answers"]:
             progress["answers"]["photos"] = {}
         if str(current_step) not in progress["answers"]["photos"]:
             progress["answers"]["photos"][str(current_step)] = []
         
-        # Add photo to current step
-        progress["answers"]["photos"][str(current_step)].append(photo_file_id)
+        # Store photo info (both file_id and local path)
+        photo_info = {
+            "file_id": photo_file_id,
+            "local_path": local_photo_path,
+            "timestamp": datetime.now().isoformat()
+        }
+        progress["answers"]["photos"][str(current_step)].append(photo_info)
         
         # Check if we have enough photos for this question
         photo_count = question.get("photo_count", 1)

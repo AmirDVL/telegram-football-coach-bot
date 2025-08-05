@@ -337,8 +337,52 @@ class FootballCoachBot:
         
         # Save updated admins
         await self.data_manager.save_data('admins', admins_data)
-        total_changes = added_count + updated_count
-        logger.info(f"🎉 JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated. Manual cleanup available via /admin_panel.")
+        
+        # CRITICAL: Remove admins who are no longer in environment variables
+        removed_count = 0
+        if isinstance(admins_data, dict):
+            # Dict format - check for admins to remove
+            env_admin_ids = set(admin_ids)
+            current_admin_ids = set(int(uid) for uid in admins_data.keys())
+            
+            # Find admins that are in current data but not in environment
+            admins_to_remove = current_admin_ids - env_admin_ids
+            
+            for admin_id_to_remove in admins_to_remove:
+                # Only remove if they were added by env sync (env_admin: true)
+                admin_data = admins_data.get(str(admin_id_to_remove), {})
+                if admin_data.get('env_admin', False) or admin_data.get('synced_from_config', False):
+                    del admins_data[str(admin_id_to_remove)]
+                    logger.info(f"  ❌ Removed admin from JSON: {admin_id_to_remove}")
+                    removed_count += 1
+        else:
+            # List format - check for admins to remove
+            env_admin_ids = set(admin_ids)
+            admins_to_keep = []
+            
+            for admin in admins_data:
+                admin_user_id = admin.get('user_id')
+                if admin_user_id in env_admin_ids:
+                    # Keep admin who is still in environment
+                    admins_to_keep.append(admin)
+                elif not admin.get('env_admin', False):
+                    # Keep admin who was not added by environment sync
+                    admins_to_keep.append(admin)
+                else:
+                    # Remove admin who was added by env sync but no longer in environment
+                    logger.info(f"  ❌ Removed admin from JSON: {admin_user_id}")
+                    removed_count += 1
+            
+            admins_data[:] = admins_to_keep
+        
+        # Save the final updated admins data with removals
+        await self.data_manager.save_data('admins', admins_data)
+        
+        total_changes = added_count + updated_count + removed_count
+        if total_changes > 0:
+            logger.info(f"🎉 JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated, {removed_count} removed")
+        else:
+            logger.info(f"✅ JSON admin sync verified! {len(admin_ids)} env admins are properly synced")
     
     async def _sync_admins_database(self):
         """Comprehensive admin sync for database mode using admin_manager"""
@@ -906,6 +950,189 @@ class FootballCoachBot:
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    # =====================================
+    # ADMIN PLAN UPLOAD HANDLERS
+    # =====================================
+    
+    async def handle_plan_upload_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+        """Handle text input during plan upload process"""
+        user_id = update.effective_user.id
+        admin_context = context.user_data.get(user_id, {})
+        
+        upload_step = admin_context.get('plan_upload_step')
+        course_type = admin_context.get('plan_course_type')
+        
+        if upload_step == 'title':
+            # Store the title and ask for file
+            context.user_data[user_id]['plan_title'] = text
+            context.user_data[user_id]['plan_upload_step'] = 'file'
+            
+            course_names = {
+                'online_weights': '🏋️ وزنه آنلاین',
+                'online_cardio': '🏃 هوازی آنلاین',
+                'online_combo': '💪 ترکیبی آنلاین',
+                'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+            }
+            
+            course_name = course_names.get(course_type, course_type)
+            
+            await update.message.reply_text(
+                f"✅ عنوان برنامه ثبت شد: {text}\n\n"
+                f"📁 حال لطفاً فایل برنامه {course_name} را ارسال کنید:\n\n"
+                f"📋 فرمت‌های قابل قبول:\n"
+                f"• فایل PDF\n"
+                f"• تصاویر (JPG, PNG)\n"
+                f"• متن (فایل TXT)\n\n"
+                f"💡 یا می‌توانید متن برنامه را مستقیماً بنویسید."
+            )
+            
+        elif upload_step == 'description':
+            # Store the description and complete upload
+            context.user_data[user_id]['plan_description'] = text
+            await self.complete_plan_upload(update, context)
+            
+        elif upload_step == 'file' and text:
+            # Handle direct text input as plan content
+            context.user_data[user_id]['plan_content'] = text
+            context.user_data[user_id]['plan_content_type'] = 'text'
+            context.user_data[user_id]['plan_upload_step'] = 'description'
+            
+            await update.message.reply_text(
+                "✅ محتوای برنامه دریافت شد!\n\n"
+                "📝 حال توضیحات اضافی برنامه را بنویسید (اختیاری):\n\n"
+                "💡 مثال: مناسب برای مبتدیان، دوره 8 هفته‌ای، نیاز به تجهیزات ورزشی\n\n"
+                "⏩ یا /skip برای رد کردن این مرحله"
+            )
+
+    async def handle_plan_upload_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle document upload during plan upload process"""
+        user_id = update.effective_user.id
+        admin_context = context.user_data.get(user_id, {})
+        
+        if not admin_context.get('uploading_plan'):
+            return False  # Not in upload mode
+            
+        upload_step = admin_context.get('plan_upload_step')
+        
+        if upload_step == 'file':
+            document = update.message.document
+            filename = document.file_name or "plan_file"
+            
+            # Store document info
+            context.user_data[user_id]['plan_content'] = document.file_id
+            context.user_data[user_id]['plan_content_type'] = 'document'
+            context.user_data[user_id]['plan_filename'] = filename
+            context.user_data[user_id]['plan_upload_step'] = 'description'
+            
+            await update.message.reply_text(
+                f"✅ فایل دریافت شد: {filename}\n\n"
+                f"📝 حال توضیحات اضافی برنامه را بنویسید (اختیاری):\n\n"
+                f"💡 مثال: مناسب برای مبتدیان، دوره 8 هفته‌ای، نیاز به تجهیزات ورزشی\n\n"
+                f"⏩ یا /skip برای رد کردن این مرحله"
+            )
+            return True
+            
+        return False
+
+    async def handle_plan_upload_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle photo upload during plan upload process"""
+        user_id = update.effective_user.id
+        admin_context = context.user_data.get(user_id, {})
+        
+        if not admin_context.get('uploading_plan'):
+            return False  # Not in upload mode
+            
+        upload_step = admin_context.get('plan_upload_step')
+        
+        if upload_step == 'file':
+            photo = update.message.photo[-1]  # Get highest resolution
+            
+            # Store photo info
+            context.user_data[user_id]['plan_content'] = photo.file_id
+            context.user_data[user_id]['plan_content_type'] = 'photo'
+            context.user_data[user_id]['plan_upload_step'] = 'description'
+            
+            await update.message.reply_text(
+                f"✅ تصویر برنامه دریافت شد!\n\n"
+                f"📝 حال توضیحات اضافی برنامه را بنویسید (اختیاری):\n\n"
+                f"💡 مثال: مناسب برای مبتدیان، دوره 8 هفته‌ای، نیاز به تجهیزات ورزشی\n\n"
+                f"⏩ یا /skip برای رد کردن این مرحله"
+            )
+            return True
+            
+        return False
+
+    async def complete_plan_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Complete the plan upload process"""
+        user_id = update.effective_user.id
+        admin_context = context.user_data.get(user_id, {})
+        
+        course_type = admin_context.get('plan_course_type')
+        title = admin_context.get('plan_title')
+        content = admin_context.get('plan_content')
+        content_type = admin_context.get('plan_content_type')
+        filename = admin_context.get('plan_filename', '')
+        description = admin_context.get('plan_description', '')
+        
+        # Create plan data
+        plan_data = {
+            'id': str(len(await self.admin_panel.load_course_plans(course_type)) + 1),
+            'title': title,
+            'content': content,
+            'content_type': content_type,
+            'filename': filename,
+            'description': description,
+            'created_at': datetime.now().isoformat(),
+            'created_by': user_id
+        }
+        
+        # Load existing plans and add new one
+        plans = await self.admin_panel.load_course_plans(course_type)
+        plans.append(plan_data)
+        
+        # Save plans
+        success = await self.admin_panel.save_course_plans(course_type, plans)
+        
+        if success:
+            course_names = {
+                'online_weights': '🏋️ وزنه آنلاین',
+                'online_cardio': '🏃 هوازی آنلاین',
+                'online_combo': '💪 ترکیبی آنلاین',
+                'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+            }
+            
+            course_name = course_names.get(course_type, course_type)
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت به مدیریت برنامه‌ها", callback_data=f'plan_course_{course_type}')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"✅ برنامه با موفقیت آپلود شد!\n\n"
+                f"📋 عنوان: {title}\n"
+                f"🎯 دوره: {course_name}\n"
+                f"📄 نوع محتوا: {content_type}\n"
+                f"📝 توضیحات: {description or 'ندارد'}\n\n"
+                f"🎉 اکنون می‌توانید این برنامه را برای کاربران ارسال کنید!",
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(
+                "❌ خطا در ذخیره برنامه! لطفاً مجددا تلاش کنید."
+            )
+        
+        # Clear upload state
+        if user_id in context.user_data:
+            context.user_data[user_id].pop('uploading_plan', None)
+            context.user_data[user_id].pop('plan_course_type', None)
+            context.user_data[user_id].pop('plan_upload_step', None)
+            context.user_data[user_id].pop('plan_title', None)
+            context.user_data[user_id].pop('plan_content', None)
+            context.user_data[user_id].pop('plan_content_type', None)
+            context.user_data[user_id].pop('plan_filename', None)
+            context.user_data[user_id].pop('plan_description', None)
+
     async def handle_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle payment process - go directly to payment"""
         query = update.callback_query
@@ -919,7 +1146,7 @@ class FootballCoachBot:
         else:
             course_type = query.data.replace('payment_', '')
         
-        # 🚫 DUPLICATE PURCHASE PREVENTION
+        # 🚫 DUPLICATE PURCHASE PREVENTION (only for same course)
         # Check if user already has an approved payment for this course
         if await self.check_duplicate_purchase(user_id, course_type):
             await query.edit_message_text(
@@ -933,7 +1160,7 @@ class FootballCoachBot:
             )
             return
         
-        # Check if user has a pending payment for this course
+        # Check if user has a pending payment for this specific course
         if await self.check_pending_purchase(user_id, course_type):
             await query.edit_message_text(
                 "⏳ شما قبلاً برای این دوره پرداخت کرده‌اید!\n\n"
@@ -948,6 +1175,11 @@ class FootballCoachBot:
         
         # Store the course type for this user
         self.payment_pending[user_id] = course_type
+        
+        # For additional course purchases, store in context
+        user_context = context.user_data.get(user_id, {})
+        if user_context.get('buying_additional_course'):
+            context.user_data[user_id]['current_course_selection'] = course_type
         
         # Go directly to payment details (questionnaire comes after approval)
         await self.show_payment_details(update, context, course_type)
@@ -1328,7 +1560,7 @@ class FootballCoachBot:
             await update.message.reply_text(payment_message, reply_markup=reply_markup)
 
     async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle photo uploads - either payment receipts or questionnaire photos"""
+        """Handle photo uploads - either payment receipts, questionnaire photos, or plan uploads"""
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
@@ -1343,12 +1575,24 @@ class FootballCoachBot:
             )
             return
 
+        # Check if admin is uploading a plan
+        if await self.admin_panel.admin_manager.is_admin(user_id):
+            if await self.handle_plan_upload_photo(update, context):
+                return  # Plan upload handled
+
         # Get user data FIRST to check payment status
         user_data = await self.data_manager.get_user_data(user_id)
         payment_status = user_data.get('payment_status')
         course_selected = user_data.get('course_selected')
         
         logger.debug(f"📊 User {user_id} photo routing - payment_status: {payment_status}, course: {course_selected}")
+
+        # Check if user is in "buying additional course" mode
+        user_context = context.user_data.get(user_id, {})
+        if user_context.get('buying_additional_course'):
+            logger.debug(f"💳 User {user_id} is purchasing additional course, processing receipt")
+            await self.process_new_course_payment(update, context)
+            return
 
         # PRIORITY 1: If user has approved payment, handle questionnaire flow
         if payment_status == 'approved':
@@ -1360,15 +1604,23 @@ class FootballCoachBot:
                 return
             else:
                 # User sent photo but current question doesn't expect it
+                # Check if they might want to buy another course
                 logger.debug(f"⚠️ User {user_id} sent photo but current question is not photo type")
                 questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
                 current_step = questionnaire_status.get('current_step', 1)
+                
+                keyboard = [
+                    [InlineKeyboardButton("🛒 خرید دوره جدید", callback_data='purchase_additional_course')],
+                    [InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await update.message.reply_text(
                     f"✅ پرداخت شما تایید شده است!\n\n"
                     f"📝 شما در حال حاضر در مرحله {current_step} پرسشنامه هستید.\n"
                     f"این مرحله نیاز به عکس ندارد.\n\n"
-                    f"لطفاً به سوال جاری پاسخ دهید یا از /start استفاده کنید."
+                    f"💡 آیا می‌خواهید دوره جدیدی خریداری کنید یا پرسشنامه را ادامه دهید؟",
+                    reply_markup=reply_markup
                 )
                 return
         
@@ -1397,6 +1649,28 @@ class FootballCoachBot:
 
         # PRIORITY 4: Handle NEW payment receipt submission
         logger.debug(f"💳 Processing new payment receipt for user {user_id}")
+        await self.process_new_course_payment(update, context)
+
+    async def process_new_course_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Process payment receipt for new course purchase"""
+        user_id = update.effective_user.id
+        user_name = update.effective_user.first_name or "کاربر"
+        
+        # Get selected course for this payment
+        user_context = context.user_data.get(user_id, {})
+        course_selected = user_context.get('current_course_selection')
+        
+        if not course_selected:
+            # Fall back to user's main course selection
+            user_data = await self.data_manager.get_user_data(user_id)
+            course_selected = user_data.get('course_selected')
+        
+        if not course_selected:
+            await update.message.reply_text(
+                "❌ ابتدا یک دوره انتخاب کنید!\n\n"
+                "برای شروع /start را بزنید."
+            )
+            return
         
         # Validate photo size and format
         photo = update.message.photo[-1]  # Get highest resolution
@@ -1404,45 +1678,70 @@ class FootballCoachBot:
         # Check file size (Telegram API limit)
         if photo.file_size and photo.file_size > 20 * 1024 * 1024:  # 20MB
             await update.message.reply_text(
-                "❌ تصویر خیلی بزرگ است!\n\n"
-                "حداکثر سایز مجاز: ۲۰ مگابایت\n"
-                "لطفاً تصویر کوچک‌تری ارسال کنید."
+                "❌ حجم فایل بیش از حد مجاز است!\n"
+                "لطفاً تصویری با حجم کمتر از 20 مگابایت ارسال کنید."
             )
             return
-        
-        # Check minimum dimensions
-        if photo.width < 200 or photo.height < 200:
-            await update.message.reply_text(
-                "❌ تصویر خیلی کوچک است!\n\n"
-                "حداقل ابعاد مورد نیاز: ۲۰۰×۲۰۰ پیکسل\n"
-                "لطفاً تصویر با کیفیت بهتر ارسال کنید."
-            )
-            return
-        
-        course_type = course_selected
-        
+
         try:
+            # Get course details and price
+            course_title = Config.COURSE_DETAILS.get(course_selected, {}).get('title', 'نامشخص')
+            price = Config.PRICES.get(course_selected, 0)
+            
+            # Check minimum dimensions
+            if photo.width < 200 or photo.height < 200:
+                await update.message.reply_text(
+                    "❌ تصویر خیلی کوچک است!\n\n"
+                    "حداقل ابعاد مورد نیاز: ۲۰۰×۲۰۰ پیکسل\n"
+                    "لطفاً تصویر با کیفیت بهتر ارسال کنید."
+                )
+                return
+            
+            # Create payment record
+            payment_id = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
             # Log payment receipt submission
             log_payment_action(user_id, user_name, f"submitted payment receipt for course: {course_selected}")
             
-            # Save receipt info with photo file_id
-            await self.data_manager.save_user_data(user_id, {
+            # Save payment record
+            payment_data = {
+                'course_type': course_selected,
+                'price': price,
+                'original_price': price,
+                'status': 'pending_approval',
+                'timestamp': datetime.now().isoformat(),
+                'user_id': user_id,
+                'payment_id': payment_id,
+                'receipt_file_id': photo.file_id
+            }
+            
+            await self.data_manager.save_payment(payment_id, payment_data)
+            
+            # Update user data (but don't change their main course selection)
+            user_updates = {
                 'receipt_submitted': True,
                 'receipt_file_id': photo.file_id,
-                'course_selected': course_type,
                 'payment_status': 'pending_approval'
-            })
+            }
+            
+            # If this is their first course purchase, set as main course
+            user_data = await self.data_manager.get_user_data(user_id)
+            if not user_data.get('course_selected'):
+                user_updates['course_selected'] = course_selected
+            
+            await self.data_manager.save_user_data(user_id, user_updates)
+            
+            # Clear additional course purchase context
+            if user_id in context.user_data:
+                context.user_data[user_id].pop('buying_additional_course', None)
+                context.user_data[user_id].pop('current_course_selection', None)
             
             await update.message.reply_text(
-                "✅ فیش واریز شما با موفقیت دریافت شد!\n\n"
-                "⏳ در حال بررسی توسط ادمین...\n"
-                "📱 از طریق همین بات از وضعیت پرداخت مطلع خواهید شد.\n\n"
-                "⏱️ زمان تقریبی بررسی: تا ۲۴ ساعت"
+                f"✅ فیش واریز برای دوره **{course_title}** با موفقیت دریافت شد!\n\n"
+                f"⏳ در حال بررسی توسط ادمین...\n"
+                f"📱 از طریق همین بات از وضعیت پرداخت مطلع خواهید شد.\n\n"
+                f"⏱️ زمان تقریبی بررسی: تا ۲۴ ساعت"
             )
-            
-            # Get course details for admin notification
-            course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
-            price = Config.PRICES.get(course_type, 0)
             
             # Notify ALL admins for approval
             admin_ids = Config.get_admin_ids()
@@ -1461,6 +1760,7 @@ class FootballCoachBot:
                         InlineKeyboardButton("✅ تایید", callback_data=f'approve_payment_{user_id}'),
                         InlineKeyboardButton("❌ رد", callback_data=f'reject_payment_{user_id}')
                     ],
+                    [InlineKeyboardButton("👤 مشاهده پروفایل", callback_data=f'view_user_{user_id}')],
                     [InlineKeyboardButton("🎛️ مدیریت پرداخت‌ها", callback_data='admin_pending_payments')]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1516,7 +1816,7 @@ class FootballCoachBot:
                 return
             
             # Process the photo through questionnaire manager
-            result = await self.questionnaire_manager.process_photo_answer(user_id, photo.file_id)
+            result = await self.questionnaire_manager.process_photo_answer(user_id, photo.file_id, context.bot)
             
             if result["status"] == "error":
                 await update.message.reply_text(result["message"])
@@ -1555,8 +1855,13 @@ class FootballCoachBot:
             )
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle document uploads (PDF files for questionnaire, CSV for admin)"""
+        """Handle document uploads (PDF files for questionnaire, CSV for admin, plan uploads)"""
         user_id = update.effective_user.id
+        
+        # Check if admin is uploading a plan
+        if await self.admin_panel.admin_manager.is_admin(user_id):
+            if await self.handle_plan_upload_document(update, context):
+                return  # Plan upload handled
         
         # Check if it's a CSV file and user is admin
         if update.message.document and update.message.document.file_name:
@@ -2128,6 +2433,18 @@ class FootballCoachBot:
             await self.handle_coupon_code(update, context, text_answer)
             return
         
+        # Check if admin is uploading a plan
+        admin_context = context.user_data.get(user_id, {})
+        if admin_context.get('uploading_plan') and await self.admin_panel.admin_manager.is_admin(user_id):
+            # Handle /skip command for skipping description
+            if text_answer.lower().strip() == '/skip':
+                context.user_data[user_id]['plan_description'] = ''
+                await self.complete_plan_upload(update, context)
+                return
+            else:
+                await self.handle_plan_upload_text(update, context, text_answer)
+                return
+        
         # Check user's payment status first using the proper method
         user_data = await self.data_manager.get_user_data(user_id)
         user_status = await self.get_user_status(user_data)
@@ -2417,7 +2734,9 @@ class FootballCoachBot:
         elif query.data == 'check_payment_status':
             await self.show_payment_status(update, context, user_data)
         elif query.data == 'continue_questionnaire':
-            await self.continue_questionnaire(update, context)
+            await self.continue_questionnaire_callback(update, context)
+        elif query.data == 'purchase_additional_course':
+            await self.purchase_additional_course(update, context)
         elif query.data == 'restart_questionnaire':
             await self.restart_questionnaire(update, context)
         elif query.data == 'view_program':
@@ -2457,6 +2776,54 @@ class FootballCoachBot:
         except Exception as e:
             logging.error(f"Error in start_new_course_selection: {e}")
             await update.callback_query.answer("متاسفانه خطایی رخ داد. لطفا دوباره تلاش کنید.")
+
+    async def purchase_additional_course(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle additional course purchase"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        
+        # Set flag that user is buying additional course
+        if user_id not in context.user_data:
+            context.user_data[user_id] = {}
+        context.user_data[user_id]['buying_additional_course'] = True
+        
+        # Show course selection for additional purchase
+        await self.start_new_course_selection(update, context)
+
+    async def continue_questionnaire_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle continue questionnaire callback"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        
+        # Get current question and show it
+        current_question = await self.questionnaire_manager.get_current_question(user_id)
+        if current_question:
+            question_text = f"""{current_question['progress_text']}
+
+{current_question['text']}"""
+            
+            # Add choices as buttons if it's a choice question
+            keyboard = []
+            if current_question.get('type') in ['choice', 'multichoice']:
+                choices = current_question.get('choices', [])
+                for choice in choices:
+                    keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+            
+            # Add navigation buttons
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='back_to_user_menu')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
+            await query.edit_message_text(question_text, reply_markup=reply_markup)
+        else:
+            await query.edit_message_text(
+                "❌ خطا در بارگذاری سوال فعلی.\n\n"
+                "لطفاً از /start استفاده کنید."
+            )
 
     async def show_user_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show comprehensive user status"""
@@ -2773,6 +3140,8 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.back_to_category, pattern='^back_to_(online|in_person)$'))
     # Admin coupon handlers (must come before generic admin_ handler)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(toggle_coupon_|delete_coupon_)'))
+    # Plan management handlers (CRITICAL FIX for plan management callbacks!)
+    application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(plan_course_|upload_plan_|send_plan_|view_plans_|send_to_user_|send_to_all_|view_plan_)'))
     # Generic admin handlers (catch remaining admin_ callbacks)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^admin_'))
     
@@ -2782,8 +3151,15 @@ def main():
     # Handle document uploads (PDF for questionnaire, CSV for admin)
     application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_document))
     
-    # Handle other unsupported file types
-    application.add_handler(MessageHandler(filters.VIDEO | filters.AUDIO | filters.VOICE | filters.ANIMATION, bot.handle_unsupported_file))
+    # Handle other unsupported file types (individual handlers for better compatibility)
+    application.add_handler(MessageHandler(filters.VIDEO, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.AUDIO, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.VOICE, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.ANIMATION, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.Sticker.ALL, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.VIDEO_NOTE, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.CONTACT, bot.handle_unsupported_file))
+    application.add_handler(MessageHandler(filters.LOCATION, bot.handle_unsupported_file))
     
     # Handle text messages (questionnaire responses)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_questionnaire_response))

@@ -140,10 +140,140 @@ chown footballbot:footballbot .env
 nano security_config.py
 ```
 
+Add the following content to `security_config.py`:
+
+```python
+# security_config.py - Additional security configurations for production
+
+import os
+import logging
+from datetime import datetime, timedelta
+import hashlib
+import secrets
+
+class SecurityConfig:
+    """Enhanced security configurations for production deployment"""
+    
+    # Rate limiting configuration
+    RATE_LIMIT_REQUESTS = 10  # Max requests per user per minute
+    RATE_LIMIT_WINDOW = 60   # Time window in seconds
+    
+    # Admin security
+    ADMIN_SESSION_TIMEOUT = 3600  # 1 hour in seconds
+    MAX_FAILED_ADMIN_ATTEMPTS = 5
+    ADMIN_LOCKOUT_DURATION = 900  # 15 minutes
+    
+    # File upload security
+    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+    SCAN_UPLOADS = True
+    
+    # Logging security
+    LOG_FAILED_LOGINS = True
+    LOG_ADMIN_ACTIONS = True
+    LOG_SUSPICIOUS_ACTIVITY = True
+    
+    # Database security
+    DB_CONNECTION_TIMEOUT = 30
+    DB_MAX_CONNECTIONS = 20
+    DB_SSL_MODE = 'require'
+    
+    # Bot security
+    WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', secrets.token_urlsafe(32))
+    BOT_TOKEN_VALIDATION = True
+    VALIDATE_USER_INPUT = True
+    
+    @staticmethod
+    def generate_secure_token():
+        """Generate a cryptographically secure token"""
+        return secrets.token_urlsafe(32)
+    
+    @staticmethod
+    def hash_user_id(user_id):
+        """Hash user ID for privacy in logs"""
+        return hashlib.sha256(str(user_id).encode()).hexdigest()[:16]
+    
+    @staticmethod
+    def validate_file_upload(file_path, file_size):
+        """Validate uploaded files for security"""
+        if file_size > SecurityConfig.MAX_FILE_SIZE:
+            return False, "File too large"
+        
+        file_ext = os.path.splitext(file_path)[1].lower()
+        if file_ext not in SecurityConfig.ALLOWED_EXTENSIONS:
+            return False, "Invalid file type"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def setup_secure_logging():
+        """Configure secure logging for production"""
+        log_format = (
+            '%(asctime)s - %(name)s - %(levelname)s - '
+            '[%(filename)s:%(lineno)d] - %(message)s'
+        )
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format=log_format,
+            handlers=[
+                logging.FileHandler('/opt/football-bot/logs/bot.log'),
+                logging.FileHandler('/opt/football-bot/logs/security.log'),
+                logging.StreamHandler()
+            ]
+        )
+        
+        # Create security-specific logger
+        security_logger = logging.getLogger('security')
+        security_handler = logging.FileHandler('/opt/football-bot/logs/security.log')
+        security_handler.setFormatter(logging.Formatter(log_format))
+        security_logger.addHandler(security_handler)
+        
+        return security_logger
+
+# Rate limiting storage (in production, use Redis)
+user_request_counts = {}
+
+def check_rate_limit(user_id):
+    """Simple rate limiting implementation"""
+    now = datetime.now()
+    
+    if user_id not in user_request_counts:
+        user_request_counts[user_id] = []
+    
+    # Clean old requests
+    user_request_counts[user_id] = [
+        req_time for req_time in user_request_counts[user_id]
+        if now - req_time < timedelta(seconds=SecurityConfig.RATE_LIMIT_WINDOW)
+    ]
+    
+    # Check if user has exceeded rate limit
+    if len(user_request_counts[user_id]) >= SecurityConfig.RATE_LIMIT_REQUESTS:
+        return False
+    
+    # Add current request
+    user_request_counts[user_id].append(now)
+    return True
+
+def log_security_event(event_type, user_id, details):
+    """Log security-related events"""
+    if SecurityConfig.LOG_SUSPICIOUS_ACTIVITY:
+        security_logger = logging.getLogger('security')
+        hashed_user = SecurityConfig.hash_user_id(user_id)
+        security_logger.warning(
+            f"SECURITY_EVENT: {event_type} - User: {hashed_user} - Details: {details}"
+        )
+
+# Initialize security logging
+security_logger = SecurityConfig.setup_secure_logging()
+```
+
 ```bash
 # 6. Set secure file permissions
 chmod 600 .env
+chmod 600 security_config.py
 chown footballbot:footballbot .env
+chown footballbot:footballbot security_config.py
 
 # 7. Create log directory with proper permissions
 mkdir -p /opt/football-bot/logs
