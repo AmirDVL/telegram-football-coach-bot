@@ -15,6 +15,7 @@ from admin_panel import AdminPanel
 from questionnaire_manager import QuestionnaireManager
 from image_processor import ImageProcessor
 from coupon_manager import CouponManager
+from admin_error_handler import admin_error_handler
 
 # Enhanced logging configuration
 def setup_enhanced_logging():
@@ -1672,6 +1673,12 @@ class FootballCoachBot:
             )
             return
         
+        # CHECK RECEIPT SUBMISSION LIMITS
+        receipt_status = await self.check_receipt_submission_limits(user_id, course_selected)
+        if not receipt_status['allowed']:
+            await update.message.reply_text(receipt_status['message'])
+            return
+        
         # Validate photo size and format
         photo = update.message.photo[-1]  # Get highest resolution
         
@@ -1715,7 +1722,10 @@ class FootballCoachBot:
                 'receipt_file_id': photo.file_id
             }
             
-            await self.data_manager.save_payment(payment_id, payment_data)
+            await self.data_manager.save_payment_data(user_id, payment_data)
+            
+            # UPDATE RECEIPT SUBMISSION COUNT
+            await self.increment_receipt_submission_count(user_id, course_selected)
             
             # Update user data (but don't change their main course selection)
             user_updates = {
@@ -1736,58 +1746,174 @@ class FootballCoachBot:
                 context.user_data[user_id].pop('buying_additional_course', None)
                 context.user_data[user_id].pop('current_course_selection', None)
             
+            # Show submission count to user
+            remaining_attempts = 3 - receipt_status['submission_count'] - 1
+            submission_info = f"\n\n📊 تعداد ارسال فیش: {receipt_status['submission_count'] + 1}/3"
+            if remaining_attempts > 0:
+                submission_info += f"\n🔄 تعداد باقی‌مانده: {remaining_attempts}"
+            else:
+                submission_info += f"\n⚠️ این آخرین فرصت ارسال فیش برای این دوره بود"
+            
             await update.message.reply_text(
                 f"✅ فیش واریز برای دوره **{course_title}** با موفقیت دریافت شد!\n\n"
                 f"⏳ در حال بررسی توسط ادمین...\n"
                 f"📱 از طریق همین بات از وضعیت پرداخت مطلع خواهید شد.\n\n"
-                f"⏱️ زمان تقریبی بررسی: تا ۲۴ ساعت"
+                f"⏱️ زمان تقریبی بررسی: تا ۲۴ ساعت{submission_info}"
             )
             
-            # Notify ALL admins for approval
-            admin_ids = Config.get_admin_ids()
-            if admin_ids:
-                admin_message = (f"🔔 درخواست تایید پرداخت جدید\n\n"
-                               f"👤 کاربر: {update.effective_user.first_name}\n"
-                               f"📱 نام کاربری: @{update.effective_user.username or 'ندارد'}\n"
-                               f"🆔 User ID: {user_id}\n"
-                               f"📚 دوره: {course_title}\n"
-                               f"💰 مبلغ: {price:,} تومان\n\n"
-                               f"⬇️ فیش واریز ارسالی:")
-                
-                # Create enhanced approval buttons
-                keyboard = [
-                    [
-                        InlineKeyboardButton("✅ تایید", callback_data=f'approve_payment_{user_id}'),
-                        InlineKeyboardButton("❌ رد", callback_data=f'reject_payment_{user_id}')
-                    ],
-                    [InlineKeyboardButton("👤 مشاهده پروفایل", callback_data=f'view_user_{user_id}')],
-                    [InlineKeyboardButton("🎛️ مدیریت پرداخت‌ها", callback_data='admin_pending_payments')]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                # Send to ALL admins
-                sent_count = 0
-                for admin_id in admin_ids:
-                    try:
-                        await context.bot.send_photo(
-                            chat_id=admin_id,
-                            photo=photo.file_id,
-                            caption=admin_message,
-                            reply_markup=reply_markup
-                        )
-                        sent_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to send payment notification to admin {admin_id}: {e}")
-                
-                logger.info(f"Payment notification sent to {sent_count}/{len(admin_ids)} admins")
+            # Notify admins with TIMEOUT PROTECTION
+            await self.notify_admins_about_payment(update, context, photo, course_title, price, user_id)
                 
         except Exception as e:
             logger.error(f"Error processing payment receipt: {e}")
-            await update.message.reply_text(
-                "❌ خطا در پردازش فیش واریز!\n\n"
-                "لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.\n"
-                f"کد خطا: {str(e)[:50]}"
+            # Use error handler for better error reporting
+            await admin_error_handler.handle_admin_error(
+                update, context, e, "process_new_course_payment", user_id
             )
+
+    async def check_receipt_submission_limits(self, user_id: int, course_code: str) -> dict:
+        """Check if user can submit more receipt attempts for a course"""
+        try:
+            user_data = await self.data_manager.get_user_data(user_id)
+            receipt_attempts = user_data.get('receipt_attempts', {})
+            course_attempts = receipt_attempts.get(course_code, 0)
+            
+            # Check if admin has allowed additional attempts
+            admin_overrides = user_data.get('admin_receipt_overrides', {})
+            admin_allowed = admin_overrides.get(course_code, 0)
+            
+            max_attempts = 3 + admin_allowed
+            
+            if course_attempts >= max_attempts:
+                if admin_allowed > 0:
+                    message = f"""❌ شما حداکثر {max_attempts} فیش برای این دوره ارسال کرده‌اید!
+
+📊 ارسال شده: {course_attempts}/{max_attempts}
+🔧 تعداد اضافی از ادمین: {admin_allowed}
+
+💡 برای ارسال فیش بیشتر با پشتیبانی تماس بگیرید."""
+                else:
+                    message = f"""❌ شما حداکثر 3 فیش برای این دوره ارسال کرده‌اید!
+
+📊 ارسال شده: {course_attempts}/3
+
+💡 برای ارسال فیش بیشتر با پشتیبانی تماس بگیرید.
+📞 ادمین‌ها می‌توانند فرصت اضافی به شما بدهند."""
+                
+                return {
+                    'allowed': False,
+                    'message': message,
+                    'submission_count': course_attempts,
+                    'max_attempts': max_attempts
+                }
+            
+            return {
+                'allowed': True,
+                'submission_count': course_attempts,
+                'max_attempts': max_attempts
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking receipt limits for user {user_id}, course {course_code}: {e}")
+            # Allow submission if there's an error (fail safe)
+            return {
+                'allowed': True,
+                'submission_count': 0,
+                'max_attempts': 3
+            }
+
+    async def increment_receipt_submission_count(self, user_id: int, course_code: str):
+        """Increment the receipt submission count for a user/course"""
+        try:
+            user_data = await self.data_manager.get_user_data(user_id)
+            receipt_attempts = user_data.get('receipt_attempts', {})
+            receipt_attempts[course_code] = receipt_attempts.get(course_code, 0) + 1
+            
+            await self.data_manager.save_user_data(user_id, {'receipt_attempts': receipt_attempts})
+            
+            logger.info(f"User {user_id} receipt attempt #{receipt_attempts[course_code]} for course {course_code}")
+            
+        except Exception as e:
+            logger.error(f"Error incrementing receipt count for user {user_id}, course {course_code}: {e}")
+
+    async def notify_admins_about_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                                        photo, course_title: str, price: int, user_id: int):
+        """Notify admins about payment with timeout protection"""
+        admin_ids = Config.get_admin_ids()
+        if not admin_ids:
+            logger.warning("No admin IDs found for payment notification")
+            return
+        
+        # Get receipt attempt info
+        user_data = await self.data_manager.get_user_data(user_id)
+        receipt_attempts = user_data.get('receipt_attempts', {})
+        course_code = user_data.get('course_selected', 'unknown')
+        attempt_count = receipt_attempts.get(course_code, 1)
+        
+        admin_message = (f"🔔 درخواست تایید پرداخت جدید\n\n"
+                       f"👤 کاربر: {update.effective_user.first_name}\n"
+                       f"📱 نام کاربری: @{update.effective_user.username or 'ندارد'}\n"
+                       f"🆔 User ID: {user_id}\n"
+                       f"📚 دوره: {course_title}\n"
+                       f"💰 مبلغ: {price:,} تومان\n"
+                       f"📊 تلاش ارسال فیش: {attempt_count}/3\n\n"
+                       f"⬇️ فیش واریز ارسالی:")
+        
+        # Create enhanced approval buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ تایید", callback_data=f'approve_payment_{user_id}'),
+                InlineKeyboardButton("❌ رد", callback_data=f'reject_payment_{user_id}')
+            ],
+            [InlineKeyboardButton("👤 مشاهده پروفایل", callback_data=f'view_user_{user_id}')],
+            [InlineKeyboardButton("🔄 اجازه فیش اضافی", callback_data=f'allow_extra_receipt_{user_id}')],
+            [InlineKeyboardButton("🎛️ مدیریت پرداخت‌ها", callback_data='admin_pending_payments')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send to admins with timeout protection
+        sent_count = 0
+        failed_admins = []
+        
+        for admin_id in admin_ids:
+            try:
+                # Use asyncio.wait_for to add timeout protection
+                await asyncio.wait_for(
+                    context.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=photo.file_id,
+                        caption=admin_message,
+                        reply_markup=reply_markup
+                    ),
+                    timeout=10.0  # 10 second timeout per admin
+                )
+                sent_count += 1
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout sending payment notification to admin {admin_id}")
+                failed_admins.append(admin_id)
+                
+            except Exception as e:
+                logger.warning(f"Failed to send payment notification to admin {admin_id}: {e}")
+                failed_admins.append(admin_id)
+        
+        logger.info(f"Payment notification sent to {sent_count}/{len(admin_ids)} admins")
+        
+        if failed_admins:
+            logger.warning(f"Failed to notify admins: {failed_admins}")
+            # Try to send a fallback text message to failed admins
+            for admin_id in failed_admins:
+                try:
+                    await asyncio.wait_for(
+                        context.bot.send_message(
+                            chat_id=admin_id,
+                            text=f"⚠️ فیش پرداخت جدید دریافت شد ولی ارسال عکس ناموفق بود.\n\n{admin_message}",
+                            reply_markup=reply_markup
+                        ),
+                        timeout=5.0
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send fallback notification to admin {admin_id}: {e}")
 
     async def handle_questionnaire_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle photo submission for questionnaire questions"""
@@ -2255,6 +2381,195 @@ class FootballCoachBot:
                 action='reject',
                 acting_admin_name=update.effective_user.first_name or "ادمین",
                 user_name=user_data.get('name', 'ناشناس')
+            )
+
+        elif query.data.startswith('allow_extra_receipt_'):
+            # Handle admin allowing extra receipt submission
+            target_user_id = int(query.data.replace('allow_extra_receipt_', ''))
+            await self.handle_allow_extra_receipt(query, context, target_user_id, user_id)
+            return
+
+    async def handle_allow_extra_receipt(self, query, context: ContextTypes.DEFAULT_TYPE, 
+                                       target_user_id: int, admin_id: int):
+        """Allow a user to submit additional receipt attempts"""
+        try:
+            admin_name = query.from_user.first_name or "ادمین"
+            
+            # Get user data
+            user_data = await self.data_manager.get_user_data(target_user_id)
+            if not user_data:
+                await query.edit_message_text(f"❌ کاربر با ID {target_user_id} یافت نشد.")
+                return
+            
+            # Get user's course
+            course_code = user_data.get('course_selected')
+            if not course_code:
+                await query.edit_message_text("❌ دوره کاربر مشخص نیست.")
+                return
+            
+            # Get current receipt attempts
+            receipt_attempts = user_data.get('receipt_attempts', {})
+            current_attempts = receipt_attempts.get(course_code, 0)
+            
+            # Get current admin overrides
+            admin_overrides = user_data.get('admin_receipt_overrides', {})
+            current_overrides = admin_overrides.get(course_code, 0)
+            
+            # Show selection buttons for number of extra attempts
+            keyboard = [
+                [
+                    InlineKeyboardButton("1️⃣ +1 فرصت", callback_data=f'grant_receipt_1_{target_user_id}'),
+                    InlineKeyboardButton("2️⃣ +2 فرصت", callback_data=f'grant_receipt_2_{target_user_id}')
+                ],
+                [
+                    InlineKeyboardButton("3️⃣ +3 فرصت", callback_data=f'grant_receipt_3_{target_user_id}'),
+                    InlineKeyboardButton("♾️ نامحدود", callback_data=f'grant_receipt_unlimited_{target_user_id}')
+                ],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'view_user_{target_user_id}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            course_title = Config.COURSE_DETAILS.get(course_code, {}).get('title', course_code)
+            user_name = user_data.get('name', 'ناشناس')
+            
+            message = f"""🔄 اجازه ارسال فیش اضافی
+
+👤 کاربر: {user_name}
+🆔 User ID: {target_user_id}
+📚 دوره: {course_title}
+
+📊 وضعیت فعلی:
+• تعداد ارسال شده: {current_attempts}
+• فرصت‌های اضافی قبلی: {current_overrides}
+• مجموع مجاز: {3 + current_overrides}
+
+💡 چند فرصت اضافی می‌خواهید به این کاربر بدهید؟"""
+            
+            await query.edit_message_text(message, reply_markup=reply_markup)
+            
+            # Log admin action
+            await admin_error_handler.log_admin_action(
+                admin_id, f"requested_extra_receipt_options", 
+                {"target_user": target_user_id, "course": course_code}
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in handle_allow_extra_receipt: {e}")
+            await admin_error_handler.handle_admin_error(
+                query, context, e, "handle_allow_extra_receipt", admin_id
+            )
+
+    async def handle_grant_receipt_approval(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle granting extra receipt attempts to users"""
+        query = update.callback_query
+        await query.answer()
+        
+        admin_id = update.effective_user.id
+        admin_name = update.effective_user.first_name or "ادمین"
+        
+        # Check admin access
+        if not await self.admin_panel.admin_manager.is_admin(admin_id):
+            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
+            return
+        
+        try:
+            # Parse callback data
+            callback_parts = query.data.split('_')
+            if len(callback_parts) < 4:
+                await query.edit_message_text("❌ داده نامعتبر.")
+                return
+            
+            extra_attempts = callback_parts[2]  # grant_receipt_X_userid
+            target_user_id = int(callback_parts[3])
+            
+            # Get user data
+            user_data = await self.data_manager.get_user_data(target_user_id)
+            if not user_data:
+                await query.edit_message_text(f"❌ کاربر با ID {target_user_id} یافت نشد.")
+                return
+            
+            course_code = user_data.get('course_selected')
+            if not course_code:
+                await query.edit_message_text("❌ دوره کاربر مشخص نیست.")
+                return
+            
+            # Get current overrides
+            admin_overrides = user_data.get('admin_receipt_overrides', {})
+            
+            # Apply the new override
+            if extra_attempts == 'unlimited':
+                admin_overrides[course_code] = 999  # Effectively unlimited
+                attempts_text = "نامحدود"
+            else:
+                additional = int(extra_attempts)
+                admin_overrides[course_code] = admin_overrides.get(course_code, 0) + additional
+                attempts_text = f"+{additional}"
+            
+            # Save the updated overrides
+            await self.data_manager.save_user_data(target_user_id, {
+                'admin_receipt_overrides': admin_overrides
+            })
+            
+            # Get updated totals
+            receipt_attempts = user_data.get('receipt_attempts', {})
+            current_attempts = receipt_attempts.get(course_code, 0)
+            new_max = 3 + admin_overrides[course_code]
+            
+            course_title = Config.COURSE_DETAILS.get(course_code, {}).get('title', course_code)
+            user_name = user_data.get('name', 'ناشناس')
+            
+            # Notify user about the extra attempts
+            try:
+                user_message = f"""🎉 فرصت اضافی برای ارسال فیش!
+
+📚 دوره: {course_title}
+🔄 فرصت‌های اضافی: {attempts_text}
+📊 مجموع مجاز: {new_max} فیش
+
+💡 حالا می‌توانید فیش جدید ارسال کنید."""
+                
+                await context.bot.send_message(chat_id=target_user_id, text=user_message)
+                user_notified = "✅ موفق"
+            except Exception as e:
+                logger.error(f"Failed to notify user {target_user_id} about extra receipt: {e}")
+                user_notified = "❌ ناموفق"
+            
+            # Update admin message
+            success_message = f"""✅ فرصت اضافی اعطا شد
+
+👤 کاربر: {user_name}
+🆔 User ID: {target_user_id}
+📚 دوره: {course_title}
+🔄 فرصت اضافی: {attempts_text}
+📊 جمع فرصت‌ها: {new_max}
+👨‍💼 توسط: {admin_name}
+📧 اطلاع‌رسانی: {user_notified}"""
+            
+            keyboard = [
+                [InlineKeyboardButton("👤 مشاهده پروفایل", callback_data=f'view_user_{target_user_id}')],
+                [InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(success_message, reply_markup=reply_markup)
+            
+            # Log admin action
+            await admin_error_handler.log_admin_action(
+                admin_id, f"granted_extra_receipt", 
+                {
+                    "target_user": target_user_id, 
+                    "course": course_code,
+                    "extra_attempts": extra_attempts,
+                    "new_total": new_max
+                }
+            )
+            
+            logger.info(f"Admin {admin_id} granted {attempts_text} extra receipt attempts to user {target_user_id} for course {course_code}")
+            
+        except Exception as e:
+            logger.error(f"Error in handle_grant_receipt_approval: {e}")
+            await admin_error_handler.handle_admin_error(
+                update, context, e, "handle_grant_receipt_approval", admin_id
             )
 
     async def show_user_profile(self, query, target_user_id: int) -> None:
@@ -2995,11 +3310,12 @@ class FootballCoachBot:
 
     async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show user's training program"""
-        course_code = user_data.get('course', 'نامشخص')
-        course_name = self.get_course_name_farsi(course_code)
-        
-        # This would typically fetch from a database or generate based on questionnaire answers
-        message = f"""📋 **برنامه تمرینی شما**
+        try:
+            course_code = user_data.get('course', 'نامشخص')
+            course_name = self.get_course_name_farsi(course_code)
+            
+            # This would typically fetch from a database or generate based on questionnaire answers
+            message = f"""📋 **برنامه تمرینی شما**
 
 دوره: {course_name}
 
@@ -3009,15 +3325,21 @@ class FootballCoachBot:
 @username_coach
 
 یا از دکمه زیر استفاده کنید:"""
-        
-        keyboard = [
-            [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
-            [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+            
+            keyboard = [
+                [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
+                [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            logging.error(f"Error in show_training_program: {e}")
+            await admin_error_handler.handle_admin_error(
+                update, context, e, "show_training_program", update.effective_user.id
+            )
 
     async def show_support_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show support contact information"""
@@ -3132,7 +3454,8 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_payment, pattern='^payment_'))
     application.add_handler(CallbackQueryHandler(bot.handle_coupon_request, pattern='^coupon_'))
     application.add_handler(CallbackQueryHandler(bot.handle_questionnaire_choice, pattern='^q_answer_'))
-    application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_)'))
+    application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_|allow_extra_receipt_)'))
+    application.add_handler(CallbackQueryHandler(bot.handle_grant_receipt_approval, pattern='^grant_receipt_'))
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_user_menu, pattern='^back_to_user_menu$'))

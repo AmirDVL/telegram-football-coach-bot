@@ -1,0 +1,186 @@
+# =================================================================
+# TELEGRAM FOOTBALL COACH BOT - LINUX PRODUCTION ONLY
+# =================================================================
+# SECURITY HARDENED - Zero development files, Linux servers only
+
+# ================================
+# 🔒 SENSITIVE DATA & SECRETS
+# ================================
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+ssl/
+certs/
+secrets/
+api_keys.*
+tokens.*
+private/
+
+# ================================
+# 📊 RUNTIME DATA & LOGS  
+# ================================
+bot_data.json
+questionnaire_data.json
+admins.json
+course_plans_*.json
+user_documents/
+questionnaire_photos/
+exports/
+backups/
+logs/
+*.log
+*.log.*
+monitoring/
+audit/
+
+# ================================
+# 💾 DATABASE & STORAGE
+# ================================
+*.db
+*.sqlite*
+*.sql
+!schema.sql
+database/
+data/
+
+# ================================
+# 🛠️ PYTHON RUNTIME
+# ================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+venv_prod/
+*.egg-info/
+.pytest_cache/
+
+# ================================
+# 🧪 DEVELOPMENT FILES - EXCLUDED
+# ================================
+test_*.py
+*_test.py
+debug_*.py
+*_debug.py
+dev_*.py
+*_dev.py
+local_*.py
+*_local.py
+mock_*.py
+*_mock.py
+verify_*.py
+check_*.py
+audit_*.py
+fix_*.py
+reset_*.py
+clear_*.py
+diagnose_*.py
+migrate_*.py
+simple_*.py
+temp_*.py
+quick_*.py
+fresh_*.py
+bootstrap.py
+manage.py
+sandbox/
+playground/
+
+# ================================
+# 📚 DOCUMENTATION - EXCLUDED
+# ================================
+*.md
+!README.md
+docs/
+ADMIN_*.md
+CRITICAL_*.md
+ENHANCED_*.md
+NAVIGATION_*.md
+PHOTO_*.md
+POSTGRESQL_*.md
+NUTRITION_*.md
+MIGRATION_*.md
+SECURITY_*.md
+CLEANUP_*.md
+KEYERROR_*.md
+HOSTING_*.md
+GITHUB_*.md
+*_SUMMARY.md
+*_FIXES.md
+*_GUIDE.md
+*_ANALYSIS.md
+*_REPORT.md
+*_COMPLETE.md
+*_REFERENCE.md
+*_CHECKLIST.md
+*_LINUX.md
+*_NEW.md
+*_IMPLEMENTATION.md
+
+# ================================
+# 🛠️ SCRIPTS - WINDOWS/DEV EXCLUDED
+# ================================
+*.bat
+*.ps1
+*.cmd
+deploy*.sh
+setup*.sh
+bootstrap*.sh
+manage*.sh
+update*.sh
+run.*
+!linux_production_reset.sh
+
+# ================================
+# 💾 TEMPORARY & BACKUP
+# ================================
+*.tmp
+*.temp
+*.backup
+*.bak
+*~
+tmp/
+temp/
+nohup.out
+*.pid
+.last_backup_location
+dev_backups/
+*_backup_*
+backup_scripts/
+
+# ================================
+# 🖥️ WINDOWS/IDE FILES - EXCLUDED
+# ================================
+.vscode/
+.idea/
+*.sublime-*
+.atom/
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# ================================
+# � NODE.JS - EXCLUDED
+# ================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ================================
+# ✅ LINUX PRODUCTION INCLUDES ONLY:
+# ================================
+# Core Bot: main.py, config.py
+# Modules: admin_panel.py, questionnaire_manager.py, data_manager.py
+# Features: image_processor.py, coupon_manager.py, admin_manager.py
+# Security: admin_error_handler.py, admin_debugger.py
+# Config: requirements.txt, .env.example
+# Deploy: linux_production_reset.sh
+# ================================
