@@ -6,11 +6,13 @@ import json
 import csv
 import io
 from datetime import datetime
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 from config import Config
 from data_manager import DataManager
+from database_manager import DatabaseManager
 from admin_panel import AdminPanel
 from questionnaire_manager import QuestionnaireManager
 from image_processor import ImageProcessor
@@ -182,7 +184,14 @@ def log_payment_action(user_id: int, action: str, amount: int = 0, course: str =
 
 class FootballCoachBot:
     def __init__(self):
-        self.data_manager = DataManager()
+        # Initialize data manager based on USE_DATABASE setting
+        if Config.USE_DATABASE:
+            self.data_manager = DatabaseManager()
+            logger.info("🗄️ Using PostgreSQL Database Manager")
+        else:
+            self.data_manager = DataManager()
+            logger.info("📁 Using JSON File Data Manager")
+            
         self.admin_panel = AdminPanel()
         self.questionnaire_manager = QuestionnaireManager()
         self.image_processor = ImageProcessor()
@@ -221,6 +230,11 @@ class FootballCoachBot:
         """Initialize bot on startup - comprehensive admin sync"""
         try:
             logger.info("🔧 Initializing admin sync from environment variables...")
+            
+            # Initialize database connection if using PostgreSQL
+            if Config.USE_DATABASE:
+                logger.info("🗄️ Initializing PostgreSQL database connection...")
+                await self.data_manager.initialize()
             
             # Setup admin directory structure
             from admin_error_handler import admin_error_handler
@@ -280,7 +294,7 @@ class FootballCoachBot:
             logger.error(f"Failed to notify admins about payment update: {e}")
     
     async def _sync_admins_json(self):
-        """Comprehensive admin sync for JSON mode - detects and applies all changes"""
+        """Comprehensive admin sync for JSON mode - handles current admins.json format"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
@@ -290,129 +304,88 @@ class FootballCoachBot:
         # Get current super admin from config (ADMIN_ID)
         config_super_admin = Config.ADMIN_ID
         
-        # Load existing admins
+        # Load existing admins - handle current format with 'admins' array and 'admin_permissions' dict
         admins_data = await self.data_manager.load_data('admins')
+        
+        # Initialize structure if empty or wrong format
+        if not admins_data or not isinstance(admins_data, dict):
+            admins_data = {
+                'super_admin': config_super_admin,
+                'admins': [],
+                'admin_permissions': {}
+            }
+        
+        # Ensure required keys exist
+        if 'admins' not in admins_data:
+            admins_data['admins'] = []
+        if 'admin_permissions' not in admins_data:
+            admins_data['admin_permissions'] = {}
+        if 'super_admin' not in admins_data:
+            admins_data['super_admin'] = config_super_admin
+        
+        # Update super admin
+        admins_data['super_admin'] = config_super_admin
         
         # Track changes
         added_count = 0
         updated_count = 0
-        
-        # Handle both dict and list formats
-        if isinstance(admins_data, dict):
-            # Dict format: {user_id: admin_data}
-            existing_admin_ids = [int(uid) for uid in admins_data.keys()]
-            
-            for admin_id in admin_ids:
-                is_super = (admin_id == config_super_admin)
-                
-                if admin_id not in existing_admin_ids:
-                    # Add new admin
-                    admins_data[str(admin_id)] = {
-                        'user_id': admin_id,
-                        'is_super_admin': is_super,
-                        'permissions': 'full',
-                        'added_at': datetime.now().isoformat(),
-                        'added_by': 'env_sync',
-                        'env_admin': True,
-                        'synced_from_config': True
-                    }
-                    logger.info(f"  ✅ Added admin to JSON: {admin_id}")
-                    added_count += 1
-                else:
-                    # Update existing admin's super admin status if changed
-                    current_is_super = admins_data[str(admin_id)].get('is_super_admin', False)
-                    if current_is_super != is_super:
-                        admins_data[str(admin_id)]['is_super_admin'] = is_super
-                        admins_data[str(admin_id)]['updated_at'] = datetime.now().isoformat()
-                        role_change = "promoted to super admin" if is_super else "demoted from super admin"
-                        logger.info(f"  🎖️ Admin {admin_id} {role_change}")
-                        updated_count += 1
-        else:
-            # List format: [{user_id: x, ...}, ...]
-            existing_admin_ids = [admin.get('user_id') for admin in admins_data if admin.get('user_id')]
-            
-            for admin_id in admin_ids:
-                is_super = (admin_id == config_super_admin)
-                
-                if admin_id not in existing_admin_ids:
-                    # Add new admin
-                    admins_data.append({
-                        'user_id': admin_id,
-                        'is_super_admin': is_super,
-                        'is_active': True,
-                        'permissions': {
-                            "can_add_admins": is_super,
-                            "can_remove_admins": is_super,
-                            "can_approve_payments": True,
-                            "can_view_users": True,
-                            "can_manage_courses": True,
-                            "can_export_data": True,
-                            "can_import_data": True,
-                            "can_view_analytics": True
-                        },
-                        'added_by': 'env_sync',
-                        'env_admin': True
-                    })
-                    logger.info(f"  ✅ Added admin to JSON: {admin_id}")
-                    added_count += 1
-                else:
-                    # Update existing admin's super admin status if changed
-                    for admin in admins_data:
-                        if admin.get('user_id') == admin_id:
-                            current_is_super = admin.get('is_super_admin', False)
-                            if current_is_super != is_super:
-                                admin['is_super_admin'] = is_super
-                                admin['updated_at'] = datetime.now().isoformat()
-                                # Update permissions based on super admin status
-                                if 'permissions' in admin and isinstance(admin['permissions'], dict):
-                                    admin['permissions']['can_add_admins'] = is_super
-                                    admin['permissions']['can_remove_admins'] = is_super
-                                role_change = "promoted to super admin" if is_super else "demoted from super admin"
-                                logger.info(f"  🎖️ Admin {admin_id} {role_change}")
-                                updated_count += 1
-                            break
-        
-        # Save updated admins
-        await self.data_manager.save_data('admins', admins_data)
-        
-        # CRITICAL: Remove admins who are no longer in environment variables
         removed_count = 0
-        if isinstance(admins_data, dict):
-            # Dict format - check for admins to remove
-            env_admin_ids = set(admin_ids)
-            current_admin_ids = set(int(uid) for uid in admins_data.keys())
-            
-            # Find admins that are in current data but not in environment
-            admins_to_remove = current_admin_ids - env_admin_ids
-            
-            for admin_id_to_remove in admins_to_remove:
-                # Only remove if they were added by env sync (env_admin: true)
-                admin_data = admins_data.get(str(admin_id_to_remove), {})
-                if admin_data.get('env_admin', False) or admin_data.get('synced_from_config', False):
-                    del admins_data[str(admin_id_to_remove)]
-                    logger.info(f"  ❌ Removed admin from JSON: {admin_id_to_remove}")
-                    removed_count += 1
-        else:
-            # List format - check for admins to remove
-            env_admin_ids = set(admin_ids)
-            admins_to_keep = []
-            
-            for admin in admins_data:
-                admin_user_id = admin.get('user_id')
-                if admin_user_id in env_admin_ids:
-                    # Keep admin who is still in environment
-                    admins_to_keep.append(admin)
-                elif not admin.get('env_admin', False):
-                    # Keep admin who was not added by environment sync
-                    admins_to_keep.append(admin)
-                else:
-                    # Remove admin who was added by env sync but no longer in environment
-                    logger.info(f"  ❌ Removed admin from JSON: {admin_user_id}")
-                    removed_count += 1
-            
-            admins_data[:] = admins_to_keep
         
-        # Save the final updated admins data with removals
+        # Current admins in the data
+        current_admin_ids = set(admins_data['admins'])
+        env_admin_ids = set(admin_ids)
+        
+        # Add new admins from environment
+        for admin_id in admin_ids:
+            is_super = (admin_id == config_super_admin)
+            
+            if admin_id not in current_admin_ids:
+                # Add to admins array
+                admins_data['admins'].append(admin_id)
+                # Add permissions
+                admins_data['admin_permissions'][str(admin_id)] = {
+                    'can_add_admins': is_super,
+                    'can_remove_admins': is_super,
+                    'can_view_users': True,
+                    'can_manage_payments': True,
+                    'is_super_admin': is_super,
+                    'added_by': 'env_sync',
+                    'added_date': datetime.now().isoformat(),
+                    'synced_from_config': True
+                }
+                logger.info(f"  ✅ Added admin to JSON: {admin_id}")
+                added_count += 1
+            else:
+                # Update existing admin's permissions if changed
+                admin_perms = admins_data['admin_permissions'].get(str(admin_id), {})
+                current_is_super = admin_perms.get('is_super_admin', False)
+                
+                if current_is_super != is_super:
+                    admins_data['admin_permissions'][str(admin_id)]['is_super_admin'] = is_super
+                    admins_data['admin_permissions'][str(admin_id)]['can_add_admins'] = is_super
+                    admins_data['admin_permissions'][str(admin_id)]['can_remove_admins'] = is_super
+                    admins_data['admin_permissions'][str(admin_id)]['updated_date'] = datetime.now().isoformat()
+                    role_change = "promoted to super admin" if is_super else "demoted from super admin"
+                    logger.info(f"  🎖️ Admin {admin_id} {role_change}")
+                    updated_count += 1
+        
+        # Remove admins who are no longer in environment (only if they were added by env sync)
+        admins_to_remove = current_admin_ids - env_admin_ids
+        for admin_id_to_remove in admins_to_remove:
+            admin_perms = admins_data['admin_permissions'].get(str(admin_id_to_remove), {})
+            
+            # Only remove if they were added by environment sync
+            if admin_perms.get('synced_from_config') or admin_perms.get('added_by') == 'env_sync':
+                # Remove from admins array
+                if admin_id_to_remove in admins_data['admins']:
+                    admins_data['admins'].remove(admin_id_to_remove)
+                # Remove permissions
+                if str(admin_id_to_remove) in admins_data['admin_permissions']:
+                    del admins_data['admin_permissions'][str(admin_id_to_remove)]
+                logger.info(f"  ❌ Removed admin from JSON: {admin_id_to_remove}")
+                removed_count += 1
+        
+        # Save updated admins data
         await self.data_manager.save_data('admins', admins_data)
         
         total_changes = added_count + updated_count + removed_count
@@ -542,7 +515,9 @@ class FootballCoachBot:
         logger.info(f"👤 PRESERVING QUESTIONNAIRE STATE - User {user_id} | /start will show current questionnaire status")
         
         # Clear admin-specific states if user is admin
-        if await self.admin_panel.admin_manager.is_admin(user_id):
+        is_admin_result = await self.admin_panel.admin_manager.is_admin(user_id)
+        
+        if is_admin_result:
             admin_states_cleared = await admin_error_handler.clear_admin_input_states(
                 self.admin_panel, user_id, "/start command - ADMIN HUB REDIRECT"
             )
@@ -1638,8 +1613,31 @@ class FootballCoachBot:
         filename = admin_context.get('plan_filename', '')
         description = admin_context.get('plan_description', '')
         
-        # Create plan data
-        plan_id = str(len(await self.admin_panel.load_course_plans(course_type)) + 1)
+        # Create plan data with improved plan_id generation
+        existing_plans = await self.admin_panel.load_course_plans(course_type)
+        
+        # Generate unique plan_id with duplicate checking
+        import uuid
+        plan_id = None
+        max_attempts = 10
+        attempt = 0
+        
+        while plan_id is None and attempt < max_attempts:
+            # Generate candidate ID
+            candidate_id = str(uuid.uuid4())[:8]
+            
+            # Check if this ID already exists
+            id_exists = any(plan.get('id') == candidate_id for plan in existing_plans)
+            
+            if not id_exists:
+                plan_id = candidate_id
+            else:
+                attempt += 1
+        
+        # Fallback if all attempts failed
+        if plan_id is None:
+            plan_id = f"{course_type}_{int(time.time())}"
+        
         plan_data = {
             'id': plan_id,
             'title': title,
@@ -2893,7 +2891,7 @@ class FootballCoachBot:
         if not is_admin:
             logger.warning(f"⚠️ Non-admin user {user_id} ({admin_name}) attempted payment approval")
             admin_logger.warning(f"Non-admin user {user_id} ({admin_name}) attempted payment approval - BLOCKED")
-            await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
+            await query.answer("❌ شما دسترسی ادمین ندارید.", show_alert=True)
             return
         
         logger.info(f"✅ Admin access confirmed for user {user_id} ({admin_name})")
@@ -4794,6 +4792,9 @@ def main():
     # Create application
     application = Application.builder().token(Config.BOT_TOKEN).build()
 
+    # Store bot instance in application context for access by admin_panel
+    application.bot_data['bot_instance'] = bot
+
     # Add handlers
     application.add_handler(CommandHandler("start", bot.start))
     # Hidden admin command - works but not shown in menu
@@ -4806,7 +4807,8 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_payment, pattern='^payment_'))
     application.add_handler(CallbackQueryHandler(bot.handle_coupon_request, pattern='^coupon_'))
     application.add_handler(CallbackQueryHandler(bot.handle_questionnaire_choice, pattern='^q_answer_'))
-    application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_|allow_extra_receipt_)'))
+    # Payment approval handlers - with more specific pattern to avoid conflicts with plan management
+    application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_\\d+$|allow_extra_receipt_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_grant_receipt_approval, pattern='^grant_receipt_'))
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     # Edit mode navigation handlers
@@ -4827,6 +4829,9 @@ def main():
     
     # Generic admin handlers (catch remaining admin_ callbacks)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^admin_'))
+    
+    # Skip plan description handler
+    application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^skip_plan_description$'))
     
     # Handle photo messages (payment receipts and questionnaire photos)
     application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo_input))

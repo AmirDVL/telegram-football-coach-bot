@@ -1597,7 +1597,7 @@ class AdminPanel:
                     doc_name = doc_info.get('name', 'نامشخص')
                     doc_file_id = doc_info.get('file_id', 'نامشخص')
                     report += f"{i}. سوال {step}: {doc_name}\n"
-                    report += f"   � File ID: {doc_file_id}\n"
+                    report += f"   🆔 File ID: {doc_file_id}\n"
             
             # Create temporary directory for zip file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -2372,7 +2372,7 @@ class AdminPanel:
             }
             
             keyboard = []
-            text = f"� مدیریت برنامه‌های {user_name}\n"
+            text = f"📋 مدیریت برنامه‌های {user_name}\n"
             text += f"📱 تلفن: {user_phone}\n\n"
             text += "دوره‌های خریداری شده:\n\n"
             
@@ -2384,8 +2384,16 @@ class AdminPanel:
                 text += f"📚 {course_name}\n"
                 text += f"   📋 {plan_count} برنامه موجود\n"
                 if course_plans:
-                    latest_plan = max(course_plans, key=lambda x: x.get('upload_date', ''))
-                    text += f"   🕐 آخرین برنامه: {latest_plan.get('upload_date', 'نامشخص')[:10]}\n"
+                    # Fix field reference: use 'created_at' instead of 'upload_date'
+                    latest_plan = max(course_plans, key=lambda x: x.get('created_at', ''))
+                    plan_date = latest_plan.get('created_at', '')
+                    if plan_date:
+                        formatted_date = plan_date[:10].replace('-', '/')  # Format: YYYY/MM/DD
+                        text += f"   🕐 آخرین برنامه: {formatted_date}\n"
+                    else:
+                        text += f"   🕐 آخرین برنامه: نامشخص\n"
+                else:
+                    text += f"   🕐 آخرین برنامه: -\n"
                 text += "\n"
                 
                 keyboard.append([InlineKeyboardButton(
@@ -2415,8 +2423,17 @@ class AdminPanel:
             user_data = bot_data.get('users', {}).get(user_id, {})
             user_name = user_data.get('name', 'نامشخص')
             
+            print(f"🔍 PLAN MANAGEMENT DEBUG - User: {user_id} ({user_name}), Course: {course_code}")
+            
             user_plans = await self.load_user_plans(user_id)
             course_plans = user_plans.get(course_code, [])
+            
+            print(f"📊 LOADED PLANS FOR DISPLAY - Course: {course_code}, Plans: {len(course_plans)}")
+            if course_plans:
+                for i, plan in enumerate(course_plans):
+                    print(f"   Plan {i+1}: {plan.get('filename', 'no filename')} - ID: {plan.get('id', 'no id')}")
+            else:
+                print(f"   No plans found for course {course_code}")
             
             course_names = {
                 'online_weights': '🏋️ وزنه آنلاین',
@@ -2437,33 +2454,30 @@ class AdminPanel:
             if course_plans:
                 text += f"📚 برنامه‌های موجود ({len(course_plans)} عدد):\n\n"
                 
-                # Sort plans by upload date (newest first)
-                sorted_plans = sorted(course_plans, key=lambda x: x.get('upload_date', ''), reverse=True)
+                # Sort plans by created date (newest first)
+                sorted_plans = sorted(course_plans, key=lambda x: x.get('created_at', ''), reverse=True)
                 
                 for i, plan in enumerate(sorted_plans, 1):
-                    upload_date = plan.get('upload_date', 'نامشخص')[:16].replace('T', ' ')
-                    plan_type = plan.get('type', 'نامشخص')
-                    file_name = plan.get('file_name', 'نامشخص')
+                    created_at = plan.get('created_at', 'نامشخص')[:16].replace('T', ' ')
+                    plan_type = plan.get('content_type', 'document')
+                    file_name = plan.get('filename', 'نامشخص')
                     
                     text += f"{i}. 📄 {file_name}\n"
-                    text += f"   📅 {upload_date}\n"
+                    text += f"   📅 {created_at}\n"
                     text += f"   📋 نوع: {plan_type}\n"
                     
-                    # Add buttons for each plan
+                    # Streamlined UI: only send and delete buttons (view is redundant)
                     plan_id = plan.get('id', f'plan_{i}')
                     keyboard.append([
-                        InlineKeyboardButton(f"�️ مشاهده برنامه {i}", callback_data=f'view_user_plan_{user_id}_{course_code}_{plan_id}'),
-                        InlineKeyboardButton(f"� ارسال برنامه {i}", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}')
-                    ])
-                    keyboard.append([
-                        InlineKeyboardButton(f"�️ حذف برنامه {i}", callback_data=f'delete_user_plan_{user_id}_{course_code}_{plan_id}')
+                        InlineKeyboardButton(f"� ارسال برنامه {i} به کاربر", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}'),
+                        InlineKeyboardButton(f"🗑 حذف برنامه {i}", callback_data=f'delete_user_plan_{user_id}_{course_code}_{plan_id}')
                     ])
                     text += "\n"
                 
-                keyboard.append([InlineKeyboardButton("� ارسال آخرین برنامه", callback_data=f'send_latest_plan_{user_id}_{course_code}')])
+                keyboard.append([InlineKeyboardButton("📤 ارسال آخرین برنامه", callback_data=f'send_latest_plan_{user_id}_{course_code}')])
             else:
                 text += "📭 هنوز هیچ برنامه‌ای برای این کاربر و دوره آپلود نشده است.\n\n"
-                text += "� برای شروع، روی 'آپلود برنامه جدید' کلیک کنید."
+                text += "📤 برای شروع، روی 'آپلود برنامه جدید' کلیک کنید."
             
             keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f'user_plans_{user_id}')])
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2476,14 +2490,45 @@ class AdminPanel:
             )
 
     async def load_user_plans(self, user_id: str) -> dict:
-        """Load all plans for a specific user organized by course"""
+        """Load all plans for a specific user organized by course - reads from course_plans files"""
         try:
-            plans_file = f'user_plans/{user_id}_plans.json'
-            if os.path.exists(plans_file):
-                with open(plans_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            return {}
+            user_plans = {}
+            
+            # List of course types to check
+            course_types = ['online_weights', 'online_cardio', 'online_combo', 
+                           'in_person_cardio', 'in_person_weights', 'nutrition_plan']
+            
+            print(f"🔍 LOADING USER PLANS DEBUG - User: {user_id}")
+            
+            for course_type in course_types:
+                plans_file = f'admin_data/course_plans/{course_type}.json'
+                print(f"   Checking {plans_file}...")
+                
+                if os.path.exists(plans_file):
+                    with open(plans_file, 'r', encoding='utf-8') as f:
+                        all_plans = json.load(f)
+                    
+                    # Filter plans for this specific user
+                    user_specific_plans = []
+                    for plan in all_plans:
+                        target_user = plan.get('target_user_id')
+                        # Check both string and int versions
+                        if str(target_user) == str(user_id) or target_user == int(user_id):
+                            user_specific_plans.append(plan)
+                    
+                    if user_specific_plans:
+                        user_plans[course_type] = user_specific_plans
+                        print(f"   Found {len(user_specific_plans)} plans for {course_type}")
+                    else:
+                        print(f"   No plans found for user in {course_type}")
+                else:
+                    print(f"   File not found: {plans_file}")
+            
+            print(f"📊 TOTAL USER PLANS LOADED: {sum(len(plans) for plans in user_plans.values())} across {len(user_plans)} courses")
+            return user_plans
+            
         except Exception as e:
+            print(f"❌ ERROR LOADING USER PLANS: {e}")
             logger.error(f"Error loading user plans for {user_id}: {e}")
             return {}
 
@@ -2509,8 +2554,8 @@ class AdminPanel:
             if course_code not in user_plans:
                 user_plans[course_code] = []
             
-            # Add timestamp and unique ID
-            plan_data['upload_date'] = datetime.now().isoformat()
+            # Add timestamp and unique ID - use consistent field names
+            plan_data['created_at'] = datetime.now().isoformat()
             plan_data['id'] = f"plan_{int(datetime.now().timestamp())}"
             
             user_plans[course_code].append(plan_data)
@@ -2581,6 +2626,9 @@ class AdminPanel:
             
             plans_file = f'admin_data/course_plans/{course_type}.json'
             
+            # Enhanced logging with more details
+            print(f"🔧 PLAN SAVE DEBUG - Course: {course_type}, Plans count: {len(plans)}, File: {plans_file}")
+            
             # Log save attempt with detailed info
             from admin_error_handler import admin_error_handler
             await admin_error_handler.log_plan_management_debug(
@@ -2593,22 +2641,34 @@ class AdminPanel:
                 details={'plans_file': plans_file, 'total_plans': len(plans)}
             )
             
+            # Check file permissions before attempting to write
+            import stat
+            if os.path.exists(plans_file):
+                file_stat = os.stat(plans_file)
+                file_perms = stat.filemode(file_stat.st_mode)
+                print(f"📋 EXISTING FILE PERMISSIONS: {file_perms}")
+            
             # Create backup of existing file first
-            import os
             if os.path.exists(plans_file):
                 backup_file = f'{plans_file}.backup'
                 import shutil
                 shutil.copy2(plans_file, backup_file)
+                print(f"💾 BACKUP CREATED: {backup_file}")
             
-            # Save new data
+            # Save new data with explicit encoding and error handling
+            print(f"💾 ATTEMPTING TO WRITE {len(plans)} plans to {plans_file}")
             with open(plans_file, 'w', encoding='utf-8') as f:
                 json.dump(plans, f, ensure_ascii=False, indent=2)
             
+            print(f"✅ FILE WRITE COMPLETED")
+            
             # Verify save by reading back
+            print(f"🔍 VERIFYING SAVE BY READING BACK...")
             with open(plans_file, 'r', encoding='utf-8') as f:
                 saved_plans = json.load(f)
                 
             save_successful = len(saved_plans) == len(plans)
+            print(f"📊 VERIFICATION RESULT - Expected: {len(plans)}, Found: {len(saved_plans)}, Success: {save_successful}")
             
             # Log save result
             await admin_error_handler.log_plan_management_debug(
@@ -2621,9 +2681,15 @@ class AdminPanel:
                 details={'verification': 'read_back_check'}
             )
             
+            print(f"🎉 PLAN SAVE COMPLETED SUCCESSFULLY: {save_successful}")
             return save_successful
             
         except Exception as e:
+            # Enhanced error logging
+            print(f"❌ PLAN SAVE FAILED - Course: {course_type}, Error: {e}")
+            print(f"❌ ERROR TYPE: {type(e).__name__}")
+            print(f"❌ ERROR DETAILS: {str(e)}")
+            
             # Log save failure
             from admin_error_handler import admin_error_handler
             await admin_error_handler.log_plan_management_debug(
@@ -2633,7 +2699,6 @@ class AdminPanel:
                 success=False,
                 details={'error': str(e), 'error_type': type(e).__name__}
             )
-            print(f"Error saving plans for {course_type}: {e}")
             return False
 
     async def handle_plan_upload(self, query, course_type: str, context=None) -> None:
@@ -2895,39 +2960,44 @@ class AdminPanel:
             user_data = bot_data.get('users', {}).get(user_id, {})
             user_name = user_data.get('name', 'نامشخص')
             
-            # Send plan to user
-            plan_file = plan.get('file_path')
-            plan_type = plan.get('type', 'نامشخص')
+            # Send plan to user - Updated for Telegram file_id support
+            plan_content = plan.get('content')  # This is the Telegram file_id
+            plan_content_type = plan.get('content_type', 'document')
             plan_title = plan.get('title', 'برنامه تمرینی')
+            plan_filename = plan.get('filename', 'برنامه')
             
-            if plan_file and os.path.exists(plan_file):
-                # Send the file to the user
-                with open(plan_file, 'rb') as file:
-                    if plan_type == 'photo':
+            if plan_content:
+                try:
+                    # Send using Telegram file_id directly
+                    caption = f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n📄 فایل: {plan_filename}\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                    
+                    if plan_content_type == 'photo':
                         await context.bot.send_photo(
                             chat_id=int(user_id),
-                            photo=file,
-                            caption=f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                            photo=plan_content,
+                            caption=caption
                         )
-                    elif plan_type == 'document':
+                    else:  # document, or any other type - send as document
                         await context.bot.send_document(
                             chat_id=int(user_id),
-                            document=file,
-                            caption=f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                            document=plan_content,
+                            caption=caption
                         )
-                    else:
-                        await context.bot.send_document(
-                            chat_id=int(user_id),
-                            document=file,
-                            caption=f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
-                        )
-                
-                await query.edit_message_text(
-                    f"✅ برنامه '{plan_title}' با موفقیت برای {user_name} ارسال شد!",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
-                    ])
-                )
+                    
+                    await query.edit_message_text(
+                        f"✅ برنامه '{plan_title}' با موفقیت برای {user_name} ارسال شد!",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("� بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                        ])
+                    )
+                    
+                except Exception as send_error:
+                    await query.edit_message_text(
+                        f"❌ خطا در ارسال برنامه: {str(send_error)}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                        ])
+                    )
             else:
                 await query.edit_message_text(
                     "❌ فایل برنامه یافت نشد!",
@@ -2962,17 +3032,21 @@ class AdminPanel:
             user_data = bot_data.get('users', {}).get(user_id, {})
             user_name = user_data.get('name', 'نامشخص')
             
-            plan_title = plan.get('title', 'نامشخص')
-            plan_type = plan.get('type', 'نامشخص')
-            upload_date = plan.get('upload_date', 'نامشخص')[:16].replace('T', ' ')
-            file_name = plan.get('file_name', 'نامشخص')
+            plan_title = plan.get('title', 'برنامه ورزشی')
+            plan_type = plan.get('content_type', 'document')
+            created_at = plan.get('created_at', '')
+            if created_at:
+                formatted_date = created_at[:16].replace('T', ' ')
+            else:
+                formatted_date = 'نامشخص'
+            file_name = plan.get('filename', 'نامشخص')
             description = plan.get('description', 'توضیحی ثبت نشده')
             
             text = f"""👁️ نمایش جزئیات برنامه
 
 👤 کاربر: {user_name}
 📋 عنوان: {plan_title}
-📅 تاریخ آپلود: {upload_date}
+📅 تاریخ آپلود: {formatted_date}
 📄 نام فایل: {file_name}
 📋 نوع: {plan_type}
 
@@ -3057,8 +3131,8 @@ class AdminPanel:
                 )
                 return
             
-            # Get the latest plan (most recent upload)
-            latest_plan = max(course_plans, key=lambda x: x.get('upload_date', ''))
+            # Get the latest plan (most recent upload) - use correct field name
+            latest_plan = max(course_plans, key=lambda x: x.get('created_at', ''))
             plan_id = latest_plan.get('id')
             
             # Redirect to send_user_plan
@@ -3288,8 +3362,11 @@ class AdminPanel:
             if context and user_id in context.user_data:
                 context.user_data[user_id]['plan_description'] = ''
             
-            # Import main bot instance to call complete_plan_upload
-            from main import bot
+            # Get bot instance from context instead of importing main
+            bot = context.bot_data.get('bot_instance') if context else None
+            if not bot:
+                await query.message.reply_text("❌ خطای سیستم! لطفاً مجددا تلاش کنید.")
+                return
             
             # Create a dummy update object for complete_plan_upload
             class DummyUpdate:

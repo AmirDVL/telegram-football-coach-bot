@@ -58,8 +58,11 @@ class AdminManager:
         """Check if user is admin"""
         admins_data = await self.load_admins()
         admins_list = admins_data.get('admins', [])
+        
         # Check both string and integer versions for compatibility
-        return user_id in admins_list or str(user_id) in admins_list
+        result = user_id in admins_list or str(user_id) in admins_list
+        
+        return result
     
     async def is_super_admin(self, user_id: int) -> bool:
         """Check if user is super admin"""
