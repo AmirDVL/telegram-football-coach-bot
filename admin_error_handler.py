@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 import os
+import tempfile
+import zipfile
 
 class AdminErrorHandler:
     """Comprehensive error handling and logging for admin operations"""
@@ -115,16 +117,33 @@ class AdminErrorHandler:
         await self.save_admin_log(error_entry)
 
     async def save_admin_log(self, log_entry: Dict[str, Any]):
-        """Save admin log entry to file"""
+        """Save admin log entry to file with enhanced error recovery"""
         try:
             log_file = 'logs/admin_audit.json'
             
-            # Load existing logs
+            # First, try to load existing logs with error recovery
+            logs = []
             if os.path.exists(log_file):
-                with open(log_file, 'r', encoding='utf-8') as f:
-                    logs = json.load(f)
-            else:
-                logs = []
+                try:
+                    with open(log_file, 'r', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if content:
+                            logs = json.loads(content)
+                except json.JSONDecodeError as e:
+                    self.admin_logger.error(f"Corrupted JSON in admin_audit.json at position {e.pos}: {e}")
+                    # Try to recover by creating a backup and starting fresh
+                    backup_file = f'logs/admin_audit_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+                    try:
+                        # Move corrupted file to backup
+                        if os.path.exists(log_file):
+                            os.rename(log_file, backup_file)
+                        self.admin_logger.warning(f"Corrupted log file backed up to {backup_file}, starting with fresh logs")
+                    except Exception as backup_error:
+                        self.admin_logger.error(f"Failed to backup corrupted log file: {backup_error}")
+                    logs = []
+                except Exception as read_error:
+                    self.admin_logger.error(f"Error reading admin log file: {read_error}")
+                    logs = []
             
             # Add new log entry
             logs.append(log_entry)
@@ -133,12 +152,29 @@ class AdminErrorHandler:
             if len(logs) > 1000:
                 logs = logs[-1000:]
             
-            # Save back to file
-            with open(log_file, 'w', encoding='utf-8') as f:
-                json.dump(logs, f, ensure_ascii=False, indent=2)
+            # Save back to file with atomic write operation
+            temp_file = f"{log_file}.tmp"
+            try:
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(logs, f, ensure_ascii=False, indent=2)
+                
+                # Atomic move - only replace the original file if write succeeded
+                if os.path.exists(temp_file):
+                    if os.path.exists(log_file):
+                        os.remove(log_file)
+                    os.rename(temp_file, log_file)
+            except Exception as write_error:
+                # Clean up temp file if write failed
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
+                raise write_error
                 
         except Exception as e:
             self.admin_logger.error(f"Failed to save admin log: {e}")
+            # Don't re-raise the exception to prevent recursive logging errors
 
     async def handle_admin_error(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
                                 error: Exception, operation_context: str, 
@@ -194,6 +230,10 @@ class AdminErrorHandler:
             user_message = "🔒 خطای دسترسی: عدم مجوز برای انجام عملیات"
         elif "timeout" in str(error).lower():
             user_message = "⏰ خطای زمان: عملیات بیش از حد طول کشید"
+        elif "There is no text in the message to edit" in str(error):
+            user_message = "📝 خطای ویرایش پیام: نمی‌توان پیام تصویری را با متن جایگزین کرد"
+        elif "BadRequest" in str(error):
+            user_message = "📡 خطای درخواست: درخواست نامعتبر به تلگرام"
         else:
             user_message = f"❌ خطای سیستم: {type(error).__name__}"
         
@@ -241,22 +281,183 @@ class AdminErrorHandler:
             self.admin_logger.error(f"Failed to generate error summary: {e}")
             return "❌ خطا در تولید گزارش خطاها"
 
+    async def repair_corrupted_logs(self):
+        """Repair corrupted admin log files"""
+        log_file = 'logs/admin_audit.json'
+        repaired = False
+        
+        if not os.path.exists(log_file):
+            self.admin_logger.info("No admin log file to repair")
+            return False
+            
+        try:
+            # Try to read the file
+            with open(log_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if content:
+                    json.loads(content)
+                    self.admin_logger.info("Admin log file is valid, no repair needed")
+                    return False
+        except json.JSONDecodeError as e:
+            self.admin_logger.error(f"Detected corrupted JSON in admin logs at position {e.pos}")
+            
+            # Create backup of corrupted file
+            backup_file = f'logs/admin_audit_corrupted_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+            try:
+                os.rename(log_file, backup_file)
+                self.admin_logger.info(f"Corrupted log file backed up to {backup_file}")
+            except Exception as backup_error:
+                self.admin_logger.error(f"Failed to backup corrupted file: {backup_error}")
+            
+            # Create fresh log file
+            try:
+                with open(log_file, 'w', encoding='utf-8') as f:
+                    json.dump([], f, ensure_ascii=False, indent=2)
+                self.admin_logger.info("Created fresh admin log file")
+                repaired = True
+            except Exception as create_error:
+                self.admin_logger.error(f"Failed to create fresh log file: {create_error}")
+                
+        except Exception as e:
+            self.admin_logger.error(f"Error checking admin log file: {e}")
+            
+        return repaired
+
     async def clear_error_logs(self):
         """Clear error logs (for admin use)"""
         try:
             self.error_logs.clear()
             
-            # Also clear the file
+            # Also clear the file  
             log_file = 'logs/admin_audit.json'
             if os.path.exists(log_file):
                 with open(log_file, 'w', encoding='utf-8') as f:
-                    json.dump([], f)
+                    json.dump([], f, ensure_ascii=False, indent=2)
             
             self.admin_logger.info("Admin error logs cleared")
             return True
         except Exception as e:
             self.admin_logger.error(f"Failed to clear error logs: {e}")
             return False
+
+    async def log_document_export_debug(self, user_id: int, export_user_id: str, 
+                                      questionnaire_data: Dict, documents_found: int,
+                                      export_result: Dict = None):
+        """Enhanced logging specifically for document export operations"""
+        debug_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'admin_id': user_id,
+            'action': 'document_export_debug',
+            'export_user_id': export_user_id,
+            'questionnaire_data_structure': {
+                'has_answers': 'answers' in questionnaire_data,
+                'answer_keys': list(questionnaire_data.get('answers', {}).keys()) if questionnaire_data.get('answers') else [],
+                'has_documents_key': 'documents' in questionnaire_data.get('answers', {}),
+                'documents_data_type': str(type(questionnaire_data.get('answers', {}).get('documents', {}))),
+                'documents_data_content': questionnaire_data.get('answers', {}).get('documents', {}),
+                'completed': questionnaire_data.get('completed', False),
+                'completion_timestamp': questionnaire_data.get('completion_timestamp', 'None')
+            },
+            'documents_found': documents_found,
+            'export_result': export_result or {},
+            'type': 'document_export_debug'
+        }
+        
+        # Detailed logging
+        self.admin_logger.info(
+            f"DOCUMENT EXPORT DEBUG - Admin {user_id} exporting user {export_user_id} | "
+            f"Documents found: {documents_found} | "
+            f"Questionnaire completed: {questionnaire_data.get('completed', False)} | "
+            f"Answer keys: {list(questionnaire_data.get('answers', {}).keys())}"
+        )
+        
+        # Save detailed debug info
+        await self.save_admin_log(debug_entry)
+        
+        return debug_entry
+
+    async def log_file_operation(self, operation: str, file_type: str, file_id: str = None,
+                                local_path: str = None, success: bool = True, 
+                                error_message: str = None, admin_id: int = None):
+        """Log file operations (download, zip creation, etc.)"""
+        operation_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'admin_id': admin_id,
+            'action': 'file_operation',
+            'operation': operation,  # 'download', 'zip_create', 'zip_add_file', etc.
+            'file_type': file_type,  # 'document', 'photo', 'zip'
+            'file_id': file_id,
+            'local_path': local_path,
+            'success': success,
+            'error_message': error_message,
+            'type': 'file_operation'
+        }
+        
+        if success:
+            self.admin_logger.info(
+                f"FILE OPERATION SUCCESS - {operation} {file_type} | "
+                f"File ID: {file_id} | Path: {local_path}"
+            )
+        else:
+            self.admin_logger.error(
+                f"FILE OPERATION FAILED - {operation} {file_type} | "
+                f"File ID: {file_id} | Error: {error_message}"
+            )
+        
+        await self.save_admin_log(operation_entry)
+
+    async def log_questionnaire_data_analysis(self, user_id: str, questionnaire_data: Dict):
+        """Detailed analysis of questionnaire data structure for debugging"""
+        analysis = {
+            'timestamp': datetime.now().isoformat(),
+            'action': 'questionnaire_data_analysis',
+            'user_id': user_id,
+            'type': 'questionnaire_analysis'
+        }
+        
+        if not questionnaire_data:
+            analysis['status'] = 'no_data'
+            analysis['message'] = 'No questionnaire data found'
+        else:
+            answers = questionnaire_data.get('answers', {})
+            analysis.update({
+                'status': 'data_found',
+                'completed': questionnaire_data.get('completed', False),
+                'total_answer_keys': len(answers),
+                'answer_keys': list(answers.keys()),
+                'documents_analysis': {},
+                'photos_analysis': {}
+            })
+            
+            # Analyze documents
+            documents_data = answers.get('documents', {})
+            analysis['documents_analysis'] = {
+                'exists': 'documents' in answers,
+                'type': str(type(documents_data)),
+                'content': documents_data if isinstance(documents_data, dict) else str(documents_data),
+                'keys': list(documents_data.keys()) if isinstance(documents_data, dict) else []
+            }
+            
+            # Analyze photos
+            photos_data = answers.get('photos', {})
+            analysis['photos_analysis'] = {
+                'exists': 'photos' in answers,
+                'type': str(type(photos_data)),
+                'keys': list(photos_data.keys()) if isinstance(photos_data, dict) else [],
+                'total_photos': sum(len(p) if isinstance(p, list) else 1 for p in photos_data.values()) if isinstance(photos_data, dict) else 0
+            }
+            
+            # Check for document-type answers in individual steps
+            document_type_answers = {}
+            for step, answer in answers.items():
+                if isinstance(answer, dict) and answer.get('type') == 'document':
+                    document_type_answers[step] = answer
+            analysis['document_type_answers'] = document_type_answers
+        
+        self.admin_logger.info(f"QUESTIONNAIRE ANALYSIS - User {user_id} | Status: {analysis.get('status')} | Documents: {analysis.get('documents_analysis', {}).get('exists', False)}")
+        await self.save_admin_log(analysis)
+        
+        return analysis
 
     def get_callback_debug_info(self, callback_data: str) -> str:
         """Get debug information for callback data"""
@@ -278,6 +479,321 @@ class AdminErrorHandler:
 • Split by underscore: {callback_data.split('_')}
 """
         return debug_info
+
+    async def log_plan_upload_workflow(self, admin_id: int, step: str, plan_data: dict = None, 
+                                     success: bool = None, error_message: str = None):
+        """Enhanced logging for plan upload workflow"""
+        workflow_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'admin_id': admin_id,
+            'action': 'plan_upload_workflow',
+            'step': step,  # 'start', 'file_received', 'description_received', 'save_attempt', 'save_success', 'save_failed'
+            'plan_data': plan_data or {},
+            'success': success,
+            'error_message': error_message,
+            'type': 'plan_workflow'
+        }
+        
+        if success is True:
+            self.admin_logger.info(f"PLAN WORKFLOW SUCCESS - Admin {admin_id} | Step: {step} | Plan: {plan_data.get('title', 'N/A')}")
+        elif success is False:
+            self.admin_logger.error(f"PLAN WORKFLOW FAILED - Admin {admin_id} | Step: {step} | Error: {error_message}")
+        else:
+            self.admin_logger.info(f"PLAN WORKFLOW STEP - Admin {admin_id} | Step: {step}")
+        
+        await self.save_admin_log(workflow_entry)
+
+    async def log_navigation_action(self, admin_id: int, current_menu: str, action: str, 
+                                  destination: str = None, context_data: dict = None):
+        """Log admin navigation for debugging flow issues"""
+        nav_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'admin_id': admin_id,
+            'action': 'admin_navigation',
+            'current_menu': current_menu,
+            'navigation_action': action,
+            'destination': destination,
+            'context_data': context_data or {},
+            'type': 'admin_navigation'
+        }
+        
+        self.admin_logger.info(
+            f"ADMIN NAVIGATION - Admin {admin_id} | From: {current_menu} | Action: {action} | To: {destination}"
+        )
+        
+        await self.save_admin_log(nav_entry)
+
+    async def log_input_state_issue(self, user_id: int, expected_state: str, actual_input: str,
+                                  problematic_flag: str = None):
+        """Log input state confusion issues (like coupon input bug)"""
+        state_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': user_id,
+            'action': 'input_state_issue',
+            'expected_state': expected_state,
+            'actual_input': actual_input,
+            'problematic_flag': problematic_flag,
+            'type': 'input_state_bug'
+        }
+        
+        self.admin_logger.warning(
+            f"INPUT STATE BUG - User {user_id} | Expected: {expected_state} | Input: {actual_input} | Flag: {problematic_flag}"
+        )
+        
+        await self.save_admin_log(state_entry)
+
+    async def log_plan_management_debug(self, admin_id: int, operation: str, 
+                                      course_type: str = None, user_id: str = None,
+                                      plans_before: int = None, plans_after: int = None,
+                                      success: bool = None, details: dict = None):
+        """Comprehensive logging for plan management operations"""
+        debug_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'admin_id': admin_id,
+            'action': 'plan_management_debug',
+            'operation': operation,  # 'load_plans', 'save_plans', 'filter_plans', 'display_plans'
+            'course_type': course_type,
+            'target_user_id': user_id,
+            'plans_before_count': plans_before,
+            'plans_after_count': plans_after,
+            'success': success,
+            'details': details or {},
+            'type': 'plan_management_debug'
+        }
+        
+        status = "SUCCESS" if success else "FAILED" if success is False else "INFO"
+        self.admin_logger.info(
+            f"PLAN MANAGEMENT {status} - Admin {admin_id} | Operation: {operation} | "
+            f"Course: {course_type} | User: {user_id} | Plans: {plans_before}→{plans_after}"
+        )
+        
+        await self.save_admin_log(debug_entry)
+        return debug_entry
+
+    async def clear_all_input_states(self, context, user_id: int, navigation_context: str = "unknown"):
+        """
+        Clear ALL possible input waiting states for a user - COMPREHENSIVE VERSION
+        This is called when user navigates away from input panels or uses /start
+        """
+        states_cleared = []
+        
+        # COMPREHENSIVE list of ALL possible input waiting states in the entire bot
+        input_states = [
+            # Core input states
+            'waiting_for_coupon',
+            'coupon_course',
+            'current_course_selection',
+            'course_selected',
+            'buying_additional_course',
+            
+            # Payment related states  
+            'awaiting_payment_receipt',
+            'payment_pending',
+            'payment_receipt_uploaded',
+            'payment_course',
+            
+            # Admin upload states
+            'uploading_plan',
+            'uploading_user_plan', 
+            'plan_course_type',
+            'plan_course_code', 
+            'plan_user_id',
+            'plan_upload_step',
+            'plan_title',
+            'plan_content',
+            'plan_content_type',
+            'plan_filename',
+            'plan_description',
+            
+            # Admin workflow states
+            'awaiting_admin_input',
+            'creating_coupon',
+            'editing_user_data',
+            'exporting_data',
+            'admin_awaiting_input',
+            
+            # Questionnaire states
+            'questionnaire_active',
+            'questionnaire_step',
+            'questionnaire_course',
+            'awaiting_questionnaire_response',
+            'current_step',
+            'questionnaire_started',
+            
+            # Form and workflow states
+            'awaiting_form',
+            'form_step',
+            'current_question_step',
+            
+            # Document and file states
+            'awaiting_document',
+            'awaiting_photo',
+            'document_upload_pending',
+            'photo_upload_pending',
+            
+            # Navigation states that might persist
+            'menu_state',
+            'current_menu',
+            'previous_menu',
+            'navigation_stack',
+            
+            # Any other potential stuck states
+            'input_mode',
+            'waiting_mode',
+            'processing_mode',
+            'temp_state',
+            'callback_waiting'
+        ]
+        
+        # Clear all input states from user-specific data
+        if user_id in context.user_data:
+            for state in input_states:
+                if state in context.user_data[user_id]:
+                    context.user_data[user_id].pop(state, None)
+                    states_cleared.append(f"user_{state}")
+        
+        # Clear global context states (some states are stored globally)
+        for state in input_states:
+            if state in context.user_data:
+                context.user_data.pop(state, None)
+                states_cleared.append(f"global_{state}")
+        
+        # Clear the entire user context if it's mostly empty to prevent stale references
+        if user_id in context.user_data:
+            user_context = context.user_data[user_id]
+            # Count non-essential keys
+            essential_keys = {'user_id', 'name', 'username', 'last_interaction'}
+            non_essential_keys = set(user_context.keys()) - essential_keys
+            
+            if len(non_essential_keys) > 0:
+                # Clear non-essential keys to ensure clean state
+                for key in list(non_essential_keys):
+                    if key in user_context:
+                        user_context.pop(key, None)
+                        states_cleared.append(f"cleanup_{key}")
+        
+        # Log the state clearing for debugging
+        if states_cleared:
+            await self.log_input_state_issue(
+                user_id=user_id,
+                expected_state="navigation_away",
+                actual_input=navigation_context,
+                problematic_flag=f"cleared_states: {', '.join(states_cleared[:10])}..."  # Limit log size
+            )
+            
+            self.admin_logger.info(
+                f"COMPREHENSIVE STATE CLEARING - User {user_id} | Context: {navigation_context} | "
+                f"Cleared: {len(states_cleared)} states"
+            )
+        
+        return states_cleared
+
+    async def reset_questionnaire_state(self, user_id: int, questionnaire_manager, reason: str = "user_navigation"):
+        """
+        Reset questionnaire progress for a user
+        This is called when user wants to completely restart or abandon questionnaire
+        """
+        try:
+            # Log the questionnaire reset
+            self.admin_logger.info(
+                f"QUESTIONNAIRE RESET - User {user_id} | Reason: {reason}"
+            )
+            
+            # Reset questionnaire progress in questionnaire_manager
+            await questionnaire_manager.reset_user_progress(user_id)
+            
+            # Log the reset action
+            await self.log_input_state_issue(
+                user_id=user_id,
+                expected_state="questionnaire_reset",
+                actual_input=reason,
+                problematic_flag="questionnaire_progress_reset"
+            )
+            
+            return True
+            
+        except Exception as e:
+            self.admin_logger.error(f"Failed to reset questionnaire state for user {user_id}: {e}")
+            return False
+
+    async def clear_admin_input_states(self, admin_panel_instance, user_id: int, navigation_context: str = "unknown"):
+        """
+        Clear admin-specific input states from admin panel
+        """
+        admin_states_cleared = []
+        
+        # Clear admin coupon creation state
+        if user_id in admin_panel_instance.admin_creating_coupons:
+            admin_panel_instance.admin_creating_coupons.discard(user_id)
+            admin_states_cleared.append("admin_creating_coupons")
+        
+        # Log admin state clearing
+        if admin_states_cleared:
+            self.admin_logger.info(
+                f"ADMIN STATE CLEARING - Admin {user_id} | Context: {navigation_context} | "
+                f"Cleared: {', '.join(admin_states_cleared)}"
+            )
+            
+            await self.log_input_state_issue(
+                user_id=user_id,
+                expected_state="admin_navigation_away",
+                actual_input=navigation_context,
+                problematic_flag=f"admin_states_cleared: {', '.join(admin_states_cleared)}"
+            )
+        
+        return admin_states_cleared
+
+    async def log_questionnaire_flow_debug(self, user_id: int, context: str, questionnaire_data: dict, 
+                                          flow_decision: str, details: dict = None):
+        """Log questionnaire flow decisions for debugging edge cases"""
+        flow_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': user_id,
+            'action': 'questionnaire_flow_debug',
+            'context': context,  # 'payment_approved', 'start_command', 'resume_questionnaire', etc.
+            'questionnaire_data': {
+                'current_step': questionnaire_data.get('current_step', 0),
+                'completed': questionnaire_data.get('completed', False),
+                'has_answers': bool(questionnaire_data.get('answers', {})),
+                'answer_count': len(questionnaire_data.get('answers', {})),
+                'started_at': questionnaire_data.get('started_at', 'unknown')
+            },
+            'flow_decision': flow_decision,  # 'resume_existing', 'start_fresh', 'show_completed', etc.
+            'details': details or {},
+            'type': 'questionnaire_flow_debug'
+        }
+        
+        self.admin_logger.info(
+            f"QUESTIONNAIRE FLOW - User {user_id} | Context: {context} | "
+            f"Step: {questionnaire_data.get('current_step', 0)} | "
+            f"Completed: {questionnaire_data.get('completed', False)} | "
+            f"Decision: {flow_decision}"
+        )
+        
+        await self.save_admin_log(flow_entry)
+        return flow_entry
+
+    async def log_state_clearing_debug(self, user_id: int, navigation_action: str, 
+                                     states_before: dict, states_after: dict):
+        """Log detailed state clearing information for debugging"""
+        clearing_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': user_id,
+            'action': 'state_clearing_debug',
+            'navigation_action': navigation_action,
+            'states_before': states_before,
+            'states_after': states_after,
+            'states_cleared': list(set(states_before.keys()) - set(states_after.keys())),
+            'type': 'state_clearing_debug'
+        }
+        
+        self.admin_logger.info(
+            f"STATE CLEARING DEBUG - User {user_id} | Action: {navigation_action} | "
+            f"Cleared: {clearing_entry['states_cleared']}"
+        )
+        
+        await self.save_admin_log(clearing_entry)
+        return clearing_entry
 
 # Create global instance
 admin_error_handler = AdminErrorHandler()

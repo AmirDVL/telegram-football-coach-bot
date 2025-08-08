@@ -179,7 +179,19 @@ class QuestionnaireManager:
             await f.write(json.dumps(data, ensure_ascii=False, indent=2))
 
     async def start_questionnaire(self, user_id: int) -> Dict[str, Any]:
-        """Start questionnaire for a user"""
+        """
+        Start questionnaire for a user - only if no existing progress exists
+        This method preserves existing questionnaire progress to prevent accidental resets
+        """
+        # Check if user already has questionnaire progress
+        existing_progress = await self.load_user_progress(user_id)
+        
+        if existing_progress:
+            # User already has questionnaire progress - return existing instead of overwriting
+            print(f"INFO: User {user_id} already has questionnaire progress at step {existing_progress.get('current_step', 'unknown')} - preserving existing progress")
+            return existing_progress
+        
+        # Only create new progress if none exists
         progress = {
             "current_step": 1,
             "answers": {},
@@ -187,6 +199,7 @@ class QuestionnaireManager:
             "completed": False
         }
         await self.save_user_progress(user_id, progress)
+        print(f"INFO: Started fresh questionnaire for user {user_id}")
         return progress
 
     def get_question(self, step: int, user_answers: Dict = None) -> Optional[Dict]:
@@ -288,7 +301,14 @@ class QuestionnaireManager:
 
         elif question["type"] == "photo":
             # Photo questions should only accept photos, not text
-            return False, "📷 این سوال نیاز به ارسال تصویر دارد. لطفاً عکس ارسال کنید، نه متن."
+            # Use unified input validator for consistent error messages
+            from input_validator import input_validator
+            return False, input_validator.get_input_type_error('photo')
+
+        elif question["type"] == "document":
+            # Document questions should only accept documents, not text
+            from input_validator import input_validator
+            return False, input_validator.get_input_type_error('document')
 
         return True, ""
 
@@ -496,8 +516,11 @@ class QuestionnaireManager:
             await f.write(json.dumps(data, ensure_ascii=False, indent=2))
 
     async def get_current_question(self, user_id: int) -> Optional[Dict]:
-        """Get current question for user"""
+        """Get current question for user - only if questionnaire is explicitly active"""
         progress = await self.load_user_progress(user_id)
+        
+        # If user has no progress data or questionnaire is completed, return None
+        # DON'T auto-start questionnaire - require explicit start
         if not progress or progress.get("completed"):
             return None
         
@@ -845,3 +868,129 @@ class QuestionnaireManager:
         if not progress:
             return {}
         return progress["answers"].get("photos", {})
+
+    # ==================== EDIT MODE FUNCTIONALITY ====================
+
+    async def start_edit_mode(self, user_id: int) -> Dict[str, Any]:
+        """Start editing completed questionnaire from the beginning"""
+        progress = await self.load_user_progress(user_id)
+        if not progress or not progress.get("completed"):
+            return {
+                "status": "error",
+                "message": "شما هنوز پرسشنامه را تکمیل نکرده‌اید یا پرسشنامه‌ای وجود ندارد."
+            }
+        
+        # Set edit mode and start from first question
+        progress["edit_mode"] = True
+        progress["edit_step"] = 1
+        progress["last_edit_updated"] = datetime.now().isoformat()
+        await self.save_user_progress(user_id, progress)
+        
+        first_question = self.get_question(1, progress["answers"])
+        current_answer = progress["answers"].get("1", "")
+        
+        return {
+            "status": "edit_started",
+            "question": first_question,
+            "step": 1,
+            "current_answer": current_answer,
+            "progress_text": f"ویرایش سوال 1 از 21",
+            "total_questions": 21
+        }
+
+    async def navigate_edit_mode(self, user_id: int, direction: str) -> Dict[str, Any]:
+        """Navigate forward/backward in edit mode"""
+        progress = await self.load_user_progress(user_id)
+        if not progress or not progress.get("edit_mode"):
+            return {
+                "status": "error", 
+                "message": "شما در حالت ویرایش نیستید."
+            }
+        
+        current_edit_step = progress.get("edit_step", 1)
+        
+        if direction == "forward":
+            new_step = current_edit_step + 1
+        elif direction == "backward":
+            new_step = current_edit_step - 1
+        else:
+            return {"status": "error", "message": "جهت نامعتبر"}
+        
+        # Validate step bounds
+        if new_step < 1:
+            return {
+                "status": "error",
+                "message": "شما در اولین سوال هستید."
+            }
+        elif new_step > 21:
+            return {
+                "status": "error", 
+                "message": "شما در آخرین سوال هستید."
+            }
+        
+        # Update edit step
+        progress["edit_step"] = new_step
+        await self.save_user_progress(user_id, progress)
+        
+        # Get question and current answer
+        question = self.get_question(new_step, progress["answers"])
+        current_answer = progress["answers"].get(str(new_step), "")
+        
+        return {
+            "status": "edit_navigation",
+            "question": question,
+            "step": new_step,
+            "current_answer": current_answer,
+            "progress_text": f"ویرایش سوال {new_step} از 21",
+            "total_questions": 21
+        }
+
+    async def update_answer_in_edit_mode(self, user_id: int, new_answer: str) -> Dict[str, Any]:
+        """Update answer for current question in edit mode"""
+        progress = await self.load_user_progress(user_id)
+        if not progress or not progress.get("edit_mode"):
+            return {
+                "status": "error",
+                "message": "شما در حالت ویرایش نیستید."
+            }
+        
+        current_edit_step = progress.get("edit_step", 1)
+        
+        # Validate answer
+        is_valid, error_message = self.validate_answer(current_edit_step, new_answer)
+        if not is_valid:
+            return {
+                "status": "error",
+                "message": error_message
+            }
+        
+        # Update answer
+        progress["answers"][str(current_edit_step)] = new_answer
+        progress["last_edit_updated"] = datetime.now().isoformat()
+        await self.save_user_progress(user_id, progress)
+        
+        return {
+            "status": "answer_updated",
+            "message": f"✅ پاسخ سوال {current_edit_step} به‌روزرسانی شد.",
+            "step": current_edit_step
+        }
+
+    async def finish_edit_mode(self, user_id: int) -> Dict[str, Any]:
+        """Exit edit mode and return to normal state"""
+        progress = await self.load_user_progress(user_id)
+        if not progress or not progress.get("edit_mode"):
+            return {
+                "status": "error",
+                "message": "شما در حالت ویرایش نیستید."
+            }
+        
+        # Remove edit mode flags
+        progress.pop("edit_mode", None)
+        progress.pop("edit_step", None)
+        progress["last_updated"] = datetime.now().isoformat()
+        await self.save_user_progress(user_id, progress)
+        
+        return {
+            "status": "edit_finished",
+            "message": "✅ ویرایش پرسشنامه تکمیل شد.\n\nتغییرات شما ذخیره شده است."
+        }

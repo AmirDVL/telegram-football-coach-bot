@@ -34,6 +34,7 @@ if (Test-Path "admins.json") {
     "users": {},
     "course_selections": {},
     "payment_receipts": {},
+    "payments": {},
     "questionnaire_progress": {},
     "admin_notifications": []
 }

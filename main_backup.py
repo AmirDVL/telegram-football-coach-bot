@@ -479,11 +479,6 @@ class FootballCoachBot:
             context, user_id, "/start command - FORCE MAIN HUB"
         )
         
-        # CRITICAL FIX: Clear questionnaire_active flag so random text won't be processed as questionnaire
-        if user_id in context.user_data and 'questionnaire_active' in context.user_data[user_id]:
-            context.user_data[user_id]['questionnaire_active'] = False
-            logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} via /start")
-        
         # CRITICAL: Also clear PERSISTENT payment states from user data AND payments table
         # This prevents rejected payments from persisting after /start navigation
         user_data_before_clear = await self.data_manager.get_user_data(user_id)
@@ -524,13 +519,10 @@ class FootballCoachBot:
             logger.info(f"🧹 CLEARING PERSISTENT PAYMENT STATES - User {user_id} | Cleared: {list(persistent_payment_data.keys())}")
             await self.data_manager.save_user_data(user_id, persistent_payment_data)
         
-        # DON'T RESET QUESTIONNAIRE PROGRESS ON /start
-        # Instead, preserve questionnaire state and let user continue or restart if they want
-        # questionnaire_reset = await admin_error_handler.reset_questionnaire_state(
-        #     user_id, self.questionnaire_manager, "/start command - FORCE RESET"
-        # )
-        
-        logger.info(f"👤 PRESERVING QUESTIONNAIRE STATE - User {user_id} | /start will show current questionnaire status")
+        # ALSO RESET QUESTIONNAIRE PROGRESS - /start should be a complete reset
+        questionnaire_reset = await admin_error_handler.reset_questionnaire_state(
+            user_id, self.questionnaire_manager, "/start command - FORCE RESET"
+        )
         
         # Clear admin-specific states if user is admin
         if await self.admin_panel.admin_manager.is_admin(user_id):
@@ -539,12 +531,11 @@ class FootballCoachBot:
             )
             
             # ALWAYS redirect admins to admin hub - no exceptions
-            logger.info(f"🔧 ADMIN /start - User {user_id} redirected to admin hub | Context states: {states_cleared} | Admin states: {admin_states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared} | Questionnaire preserved")
-            await self.admin_panel.show_admin_hub_for_command(update, context, user_id)
+            logger.info(f"🔧 ADMIN /start - User {user_id} redirected to admin hub | Context states: {states_cleared} | Admin states: {admin_states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared}")
+            await self.admin_panel.show_admin_main_menu(update, context)
             return
         
-        # For regular users, always show the same simple unified menu
-        # This ensures /start always has consistent behavior regardless of user state
+        # For regular users, always show their appropriate status-based menu
         user_data = await self.data_manager.get_user_data(user_id)
         
         # Update user interaction data
@@ -559,8 +550,8 @@ class FootballCoachBot:
         user_data = await self.data_manager.get_user_data(user_id)
         user_data['user_id'] = user_id
         
-        # SIMPLE, UNIFIED MENU - always the same layout (questionnaire preserved)
-        logger.info(f"👤 USER /start - User {user_id} redirected to simple unified menu | Context states: {states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared} | Questionnaire preserved")
+        # SIMPLE, UNIFIED MENU - always the same layout
+        logger.info(f"👤 USER /start - User {user_id} redirected to simple unified menu | Context states: {states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared}")
         await self.show_simple_unified_menu(update, context, user_data, user_name)
 
     async def show_simple_unified_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict, user_name: str) -> None:
@@ -632,48 +623,24 @@ class FootballCoachBot:
             welcome_text = f"سلام {user_name}! 👋\n\n⏳ پرداخت شما برای دوره **{course_name}** در انتظار تایید است.\n\nمی‌توانید وضعیت پرداخت خود را بررسی کنید:"
             
         elif status == 'payment_approved':
-            # User payment approved - use comprehensive questionnaire requirement analysis
-            quest_req_status = await self.get_user_questionnaire_requirement_status(user_id)
-            purchased_courses = quest_req_status['purchased_courses']
-            course_count = len(purchased_courses)
-            
-            # DEBUG LOGGING for questionnaire flow
-            questionnaire_status = quest_req_status['questionnaire_status']
-            from admin_error_handler import admin_error_handler
-            await admin_error_handler.log_questionnaire_flow_debug(
-                user_id=user_id,
-                context='payment_approved_status_menu',
-                questionnaire_data=questionnaire_status or {},
-                flow_decision='analyzing_requirements',
-                details={
-                    'purchased_courses': list(purchased_courses),
-                    'requires_questionnaire': quest_req_status['requires_questionnaire'],
-                    'can_access_programs': quest_req_status['can_access_programs'],
-                    'questionnaire_completed': quest_req_status['questionnaire_completed'],
-                    'questionnaire_in_progress': quest_req_status['questionnaire_in_progress']
-                }
-            )
-            
-            # Get primary course for display (most recent or default)
+            # User payment approved, questionnaire pending or in progress
+            questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
             course_code = user_data.get('course', 'نامشخص')
             course_name = self.get_course_name_farsi(course_code)
             
-            if quest_req_status['can_access_programs']:
-                # User can access programs (either no questionnaire needed or questionnaire completed)
+            if questionnaire_status.get('completed', False):
+                # Questionnaire completed, show comprehensive program access menu
+                # Get purchased courses for better context
+                purchased_courses = await self.get_user_purchased_courses(user_id)
+                course_count = len(purchased_courses)
+                
                 keyboard = [
                     [InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')],
                     [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
                     [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
+                    [InlineKeyboardButton("🔄 بروزرسانی پرسشنامه", callback_data='restart_questionnaire')],
+                    [InlineKeyboardButton("🛒 دوره جدید", callback_data='new_course')]
                 ]
-                
-                # Only show questionnaire options if questionnaire is required for their courses
-                if quest_req_status['requires_questionnaire']:
-                    keyboard.extend([
-                        [InlineKeyboardButton("✏️ ویرایش پرسشنامه", callback_data='edit_questionnaire')],
-                        [InlineKeyboardButton("🔄 بروزرسانی پرسشنامه", callback_data='restart_questionnaire')],
-                    ])
-                
-                keyboard.append([InlineKeyboardButton("🛒 دوره جدید", callback_data='new_course')])
                 
                 if admin_mode:
                     keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
@@ -682,6 +649,7 @@ class FootballCoachBot:
                 nutrition_info = ""
                 
                 # Only show nutrition info if user purchased nutrition plan
+                purchased_courses = await self.get_user_purchased_courses(user_id)
                 if 'nutrition_plan' in purchased_courses:
                     nutrition_info = """
 
@@ -702,102 +670,19 @@ class FootballCoachBot:
                 if course_count > 1:
                     welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
                 else:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 برنامه شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 پرسشنامه شما تکمیل شده و برنامه شخصی‌سازی شده!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
             else:
-                # User needs to complete questionnaire - check if questionnaire already exists
-                questionnaire_status = quest_req_status['questionnaire_status']
-                current_step = questionnaire_status.get('current_step', 0)
+                # Questionnaire not completed - automatically start questionnaire
+                current_step = questionnaire_status.get('current_step', 1)
                 total_steps = questionnaire_status.get('total_steps', 21)
                 
-                # CRITICAL DEBUG: Log questionnaire_status raw data for edge case debugging
-                logger.info(f"🔍 QUESTIONNAIRE STATUS DEBUG - User {user_id}")
-                logger.info(f"  Raw questionnaire_status: {questionnaire_status}")
-                logger.info(f"  current_step extracted: {current_step} (type: {type(current_step)})")
-                logger.info(f"  answers count: {len(questionnaire_status.get('answers', {}))}")
-                logger.info(f"  questionnaire keys: {list(questionnaire_status.keys()) if questionnaire_status else 'None'}")
-                
-                # ENHANCED DETECTION: Check for existing questionnaire progress
-                has_existing_questionnaire = (
-                    questionnaire_status and 
-                    (current_step > 0 or len(questionnaire_status.get('answers', {})) > 0)
-                )
-                
-                # DEBUG LOGGING for questionnaire detection
-                await admin_error_handler.log_questionnaire_flow_debug(
-                    user_id=user_id,
-                    context='payment_approved_questionnaire_detection',
-                    questionnaire_data=questionnaire_status or {},
-                    flow_decision=f'has_existing: {has_existing_questionnaire}, step: {current_step}',
-                    details={
-                        'current_step': current_step,
-                        'total_steps': total_steps,
-                        'has_existing_questionnaire': has_existing_questionnaire,
-                        'answer_count': len(questionnaire_status.get('answers', {})),
-                        'questionnaire_status_raw': questionnaire_status,
-                        'decision_path_debug': f'step_check: current_step({current_step}) > 1 = {current_step > 1}, step_equals_1: {current_step == 1}',
-                        'expected_branch': (
-                            'resume_step_gt_1' if (has_existing_questionnaire and current_step > 1) 
-                            else 'existing_step_1' if (has_existing_questionnaire and current_step == 1)
-                            else 'fresh_start'
-                        )
-                    }
-                )
-                
-                if has_existing_questionnaire and current_step > 1:
-                    # Resume existing questionnaire from saved progress
+                # Check if questionnaire is already started
+                if current_step > 1:
+                    # Resume existing questionnaire
                     current_question = await self.questionnaire_manager.get_current_question(user_id)
                     if current_question:
-                        # COMPREHENSIVE DEBUG: Track branch execution
-                        logger.info(f"🎯 BRANCH: resume_step_gt_1 - User {user_id} | Step: {current_step} | Question: {current_question.get('step', 'unknown')}")
-                        
-                        # CRITICAL FIX: Set questionnaire_active flag so text input will be processed
-                        if user_id not in context.user_data:
-                            context.user_data[user_id] = {}
-                        context.user_data[user_id]['questionnaire_active'] = True
-                        logger.info(f"✅ SET questionnaire_active flag - User {user_id} resuming at step {current_step}")
-                        
-                        # ROBUST FIX: Also set a timestamp to track when flag was set
-                        context.user_data[user_id]['questionnaire_activated_at'] = datetime.now().isoformat()
-                        
-                        # ADDITIONAL FIX: Verify questionnaire data is immediately available
-                        verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
-                        verification_question = await self.questionnaire_manager.get_current_question(user_id)
-                        logger.info(f"🔧 QUESTIONNAIRE VERIFICATION - User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
-                        
-                        # If verification fails, force questionnaire readiness
-                        if not verification_progress or not verification_question:
-                            logger.warning(f"⚠️ QUESTIONNAIRE DATA NOT READY - User {user_id} - attempting to fix")
-                            # Force refresh questionnaire data
-                            await self.questionnaire_manager.start_questionnaire(user_id)
-                            verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
-                            logger.info(f"🔧 AFTER FIX - User {user_id}: progress available = {verification_progress is not None}")
-                        
-                        # DEBUG: Log questionnaire resume activation
-                        await admin_error_handler.log_questionnaire_flow_debug(
-                            user_id=user_id,
-                            context="questionnaire_activated_payment_approved_resume",
-                            questionnaire_data=questionnaire_status,
-                            flow_decision="set_questionnaire_active_flag_resume",
-                            details={
-                                'step': current_step,
-                                'has_question': bool(current_question),
-                                'question_type': current_question.get('type', 'unknown') if current_question else None,
-                                'context_flag_set': True,
-                                'resume_from_step': current_step,
-                                'branch_taken': 'resume_step_gt_1',
-                                'question_step_from_manager': current_question.get('step', 'unknown'),
-                                'question_progress_text_from_manager': current_question.get('progress_text', 'none'),
-                                'verification_progress_available': verification_progress is not None,
-                                'verification_question_available': verification_question is not None
-                            }
-                        )
-                        
-                        # Show current question directly - USE PROGRESS TEXT FROM QUESTION MANAGER
-                        # POTENTIAL FIX: Use progress text from questionnaire manager instead of recalculating
-                        if current_question.get('progress_text'):
-                            progress_text = current_question['progress_text']
-                        else:
-                            progress_text = f"سوال {current_step} از {total_steps}"
+                        # Show current question directly
+                        progress_text = f"سوال {current_step} از {total_steps}"
                         message = f"{progress_text}\n\n{current_question['text']}"
                         
                         keyboard = []
@@ -808,7 +693,7 @@ class FootballCoachBot:
                         keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
                         
                         reply_markup = InlineKeyboardMarkup(keyboard)
-                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 بازگشت به پرسشنامه از جایی که رها کردید\n\n{message}"
+                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n\n{message}"
                     else:
                         # Fallback to continue button if question not found
                         keyboard = [
@@ -816,120 +701,16 @@ class FootballCoachBot:
                         ]
                         if admin_mode:
                             keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
-                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه شخصی را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                elif has_existing_questionnaire and current_step == 1:
-                    # User has a questionnaire at step 1 - show first question
-                    first_question = self.questionnaire_manager.get_question(1, questionnaire_status.get('answers', {}))
-                    if first_question:
-                        # COMPREHENSIVE DEBUG: Track branch execution  
-                        logger.info(f"🎯 BRANCH: existing_step_1 - User {user_id} | Step: {current_step} | Question for step 1")
-                        
-                        # CRITICAL FIX: Set questionnaire_active flag so text input will be processed
-                        if user_id not in context.user_data:
-                            context.user_data[user_id] = {}
-                        context.user_data[user_id]['questionnaire_active'] = True
-                        logger.info(f"✅ SET questionnaire_active flag - User {user_id} in payment_approved flow (existing questionnaire at step 1)")
-                        
-                        # ROBUST FIX: Also set a timestamp to track when flag was set
-                        context.user_data[user_id]['questionnaire_activated_at'] = datetime.now().isoformat()
-                        
-                        # ADDITIONAL FIX: Verify questionnaire data is immediately available for step 1
-                        verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
-                        verification_question = await self.questionnaire_manager.get_current_question(user_id)
-                        logger.info(f"🔧 QUESTIONNAIRE VERIFICATION STEP 1 - User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
-                        
-                        # DEBUG: Log comprehensive questionnaire activation state
-                        await admin_error_handler.log_questionnaire_flow_debug(
-                            user_id=user_id,
-                            context="questionnaire_activated_payment_approved_existing",
-                            questionnaire_data=questionnaire_status,
-                            flow_decision="set_questionnaire_active_flag",
-                            details={
-                                'step': 1,
-                                'has_question': bool(first_question),
-                                'question_type': first_question.get('type', 'unknown') if first_question else None,
-                                'context_flag_set': True,
-                                'branch_taken': 'existing_step_1',
-                                'verification_progress_available': verification_progress is not None,
-                                'verification_question_available': verification_question is not None
-                            }
-                        )
-                        
-                        progress_text = "سوال 1 از 21"
-                        # POTENTIAL FIX: If the question returned doesn't match step 1, use its actual progress
-                        if first_question.get('progress_text'):
-                            logger.warning(f"⚠️ PROGRESS TEXT MISMATCH - Expected step 1, got: {first_question.get('progress_text')}")
-                            progress_text = first_question['progress_text']
-                        
-                        message = f"{progress_text}\n\n{first_question['text']}"
-                        
-                        keyboard = []
-                        if first_question.get('type') == 'choice':
-                            choices = first_question.get('choices', [])
-                            for choice in choices:
-                                keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
-                        
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 بازگشت به پرسشنامه شخصی‌تان\n\n{message}"
-                    else:
-                        # Fallback if first question not found
-                        keyboard = [
-                            [InlineKeyboardButton("📝 شروع پرسشنامه", callback_data='continue_questionnaire')]
-                        ]
-                        if admin_mode:
-                            keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
-                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 لطفاً پرسشنامه شخصی را شروع کنید:"
+                        welcome_text = f"سلام {user_name}! 👋\n\n✅ پرداخت شما تایید شده است.\n📝 پرسشنامه: مرحله {current_step} از {total_steps}\n\nلطفاً پرسشنامه را تکمیل کنید تا برنامه شخصی‌سازی شده شما آماده شود:"
                         reply_markup = InlineKeyboardMarkup(keyboard)
                 else:
-                    # No existing questionnaire - start fresh
+                    # Start fresh questionnaire
                     first_question = self.questionnaire_manager.get_question(1, {})
                     if first_question:
-                        # COMPREHENSIVE DEBUG: Track branch execution
-                        logger.info(f"🎯 BRANCH: fresh_start - User {user_id} | Starting fresh questionnaire")
-                        
                         # Initialize questionnaire for user
                         await self.questionnaire_manager.start_questionnaire(user_id)
                         
-                        # CRITICAL FIX: Set questionnaire_active flag so text input will be processed
-                        if user_id not in context.user_data:
-                            context.user_data[user_id] = {}
-                        context.user_data[user_id]['questionnaire_active'] = True
-                        logger.info(f"✅ SET questionnaire_active flag - User {user_id} in fresh questionnaire flow")
-                        
-                        # ROBUST FIX: Also set a timestamp to track when flag was set
-                        context.user_data[user_id]['questionnaire_activated_at'] = datetime.now().isoformat()
-                        
-                        # ADDITIONAL FIX: Verify questionnaire data is immediately available after start
-                        verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
-                        verification_question = await self.questionnaire_manager.get_current_question(user_id)
-                        logger.info(f"🔧 QUESTIONNAIRE VERIFICATION FRESH - User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
-                        
-                        # DEBUG: Log comprehensive questionnaire activation state
-                        await admin_error_handler.log_questionnaire_flow_debug(
-                            user_id=user_id,
-                            context="questionnaire_activated_payment_approved_fresh",
-                            questionnaire_data={'current_step': 1, 'started': True},
-                            flow_decision="set_questionnaire_active_flag_fresh_start",
-                            details={
-                                'step': 1,
-                                'has_question': bool(first_question),
-                                'question_type': first_question.get('type', 'unknown') if first_question else None,
-                                'context_flag_set': True,
-                                'questionnaire_manager_started': True,
-                                'branch_taken': 'fresh_start',
-                                'verification_progress_available': verification_progress is not None,
-                                'verification_question_available': verification_question is not None
-                            }
-                        )
-                        
                         progress_text = "سوال 1 از 21"
-                        # POTENTIAL FIX: If the question returned doesn't match step 1, use its actual progress  
-                        if first_question.get('progress_text'):
-                            logger.warning(f"⚠️ PROGRESS TEXT MISMATCH - Expected step 1, got: {first_question.get('progress_text')}")
-                            progress_text = first_question['progress_text']
-                            
                         message = f"{progress_text}\n\n{first_question['text']}"
                         
                         keyboard = []
@@ -1113,34 +894,6 @@ class FootballCoachBot:
         
         return purchased_courses
 
-    async def get_user_questionnaire_requirement_status(self, user_id: int) -> dict:
-        """
-        Determine questionnaire requirement status for a user
-        Returns comprehensive status for multi-course scenarios
-        """
-        purchased_courses = await self.get_user_purchased_courses(user_id)
-        questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
-        
-        # Courses that require questionnaire completion
-        courses_requiring_questionnaire = {'in_person_cardio', 'in_person_weights', 'online_cardio', 'online_weights'}
-        
-        # Check if user has any courses that require questionnaire
-        requires_questionnaire = bool(purchased_courses & courses_requiring_questionnaire)
-        
-        questionnaire_completed = questionnaire_status.get('completed', False)
-        questionnaire_in_progress = (questionnaire_status.get('current_step', 0) > 0 and 
-                                    not questionnaire_completed)
-        
-        return {
-            'purchased_courses': purchased_courses,
-            'requires_questionnaire': requires_questionnaire,
-            'questionnaire_completed': questionnaire_completed,
-            'questionnaire_in_progress': questionnaire_in_progress,
-            'questionnaire_status': questionnaire_status,
-            'can_access_programs': (not requires_questionnaire) or questionnaire_completed,
-            'needs_to_complete_questionnaire': requires_questionnaire and not questionnaire_completed
-        }
-
     async def has_purchased_course(self, user_id: int, course_type: str) -> bool:
         """Check if user has purchased a specific course"""
         purchased_courses = await self.get_user_purchased_courses(user_id)
@@ -1308,16 +1061,13 @@ class FootballCoachBot:
         )
         
         # Store that we're waiting for coupon code
-        if user_id not in context.user_data:
-            context.user_data[user_id] = {}
-        context.user_data[user_id]['waiting_for_coupon'] = True
-        context.user_data[user_id]['coupon_course'] = course_type
+        context.user_data['waiting_for_coupon'] = True
+        context.user_data['coupon_course'] = course_type
 
     async def handle_coupon_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE, coupon_code: str) -> None:
         """Handle coupon code validation and processing"""
         user_id = update.effective_user.id
-        user_context = context.user_data.get(str(user_id), {})
-        course_type = user_context.get('coupon_course')
+        course_type = context.user_data.get('coupon_course')
         
         # Safety check: Ensure we have valid coupon context
         if not course_type:
@@ -1334,12 +1084,10 @@ class FootballCoachBot:
             )
             return
         
-        # Clear coupon waiting state for this specific user
-        if str(user_id) not in context.user_data:
-            context.user_data[str(user_id)] = {}
-        context.user_data[str(user_id)]['waiting_for_coupon'] = False
-        if 'coupon_course' in context.user_data[str(user_id)]:
-            del context.user_data[str(user_id)]['coupon_course']
+        # Clear coupon waiting state
+        context.user_data['waiting_for_coupon'] = False
+        if 'coupon_course' in context.user_data:
+            del context.user_data['coupon_course']
         
         if not course_type:
             await update.message.reply_text(
@@ -1411,24 +1159,6 @@ class FootballCoachBot:
         """Handle text input during plan upload process"""
         user_id = update.effective_user.id
         admin_context = context.user_data.get(user_id, {})
-        
-        # UNIFIED INPUT TYPE VALIDATION for admin operations
-        from input_validator import input_validator
-        
-        upload_step = admin_context.get('plan_upload_step')
-        
-        # Validate that text input is appropriate for this step
-        expected_input_types = {
-            'title': 'plan_description',
-            'description': 'plan_description'
-        }
-        
-        if upload_step in expected_input_types:
-            is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                update, expected_input_types[upload_step], f"آپلود برنامه - مرحله {upload_step}", is_admin=True
-            )
-            if not is_valid:
-                return
         
         upload_step = admin_context.get('plan_upload_step')
         
@@ -2015,38 +1745,19 @@ class FootballCoachBot:
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در واردات پرداخت‌ها: {str(e)}")
 
-    async def start_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_type: str = None) -> None:
-        """
-        Start the questionnaire process (PERSON-SPECIFIC, not course-specific)
-        
-        The questionnaire is tied to the PERSON, not the course they're purchasing.
-        Once completed, it applies to ALL their future course purchases.
-        """
+    async def start_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_type: str) -> None:
+        """Start the questionnaire process"""
         query = update.callback_query
         user_id = update.effective_user.id
         
-        # Check if user already has completed questionnaire
-        existing_progress = await self.questionnaire_manager.load_user_progress(user_id)
-        if existing_progress and existing_progress.get('completed', False):
-            # User already has completed questionnaire - redirect to course payment
-            await self.show_payment_details(update, context, course_type)
-            return
-        
-        # Start or resume questionnaire (regardless of course type)
-        if not existing_progress:
-            # Start fresh questionnaire
-            await self.questionnaire_manager.start_questionnaire(user_id)
-        
-        # Get current question
+        # Start the questionnaire and get the first question
+        await self.questionnaire_manager.start_questionnaire(user_id)
         question = await self.questionnaire_manager.get_current_question(user_id)
         
         if question:
             intro_message = f"""✨ عالی! قبل از پرداخت باید اطلاعاتت رو تکمیل کنیم
 
-📋 این پرسشنامه شخصی شماست و برای همه دوره‌هایتان استفاده می‌شود
-⭐ فقط یک بار تکمیل کنید، برای همه خریدهای بعدی استفاده می‌شود
-
-🔢 این فرآیند فقط {17} سوال ساده داره تا بتونم بهترین برنامه تمرینی رو برات طراحی کنم
+📋 این فرآیند فقط {17} سوال ساده داره تا بتونم بهترین برنامه تمرینی رو برات طراحی کنم
 
 ⏱️ زمان تقریبی: 3-5 دقیقه
 
@@ -2070,12 +1781,8 @@ class FootballCoachBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(intro_message, reply_markup=reply_markup)
         else:
-            # Something went wrong, proceed to payment if course_type provided
-            if course_type:
-                await self.show_payment_details(update, context, course_type)
-            else:
-                await query.answer("خطا در بارگذاری پرسشنامه")
-                await self.show_status_based_menu(update, context, await self.data_manager.get_user_data(user_id), update.effective_user.first_name or "کاربر")
+            # Something went wrong, proceed to payment
+            await self.show_payment_details(update, context, course_type)
 
     async def show_payment_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_type: str) -> None:
         """Show payment details with coupon support"""
@@ -2186,15 +1893,12 @@ class FootballCoachBot:
         else:
             await update.message.reply_text(payment_message, reply_markup=reply_markup)
 
-    async def handle_photo_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """
-        MASTER PHOTO ROUTER - Routes photos to appropriate handlers based on user state
-        This ensures photos are processed correctly based on context, not blindly as payment receipts
-        """
+    async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle photo uploads - STRICT STATE VALIDATION to prevent processing random photos"""
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
-        logger.debug(f"📷 PHOTO ROUTER - Photo received from user {user_id} ({user_name})")
+        logger.debug(f"📷 Photo received from user {user_id} ({user_name})")
         
         # First, validate that this is actually a photo message
         if not update.message or not update.message.photo:
@@ -2205,122 +1909,84 @@ class FootballCoachBot:
             )
             return
 
-        # PRIORITY 1: Check if admin is uploading a plan
+        # CRITICAL INPUT STATE VALIDATION - Check if user should actually be sending photos
+        # This prevents processing random photos when user is not in appropriate input flow
+        
+        # Check if admin is uploading a plan (ADMIN PRIORITY)
         if await self.admin_panel.admin_manager.is_admin(user_id):
             admin_context = context.user_data.get(user_id, {})
             if admin_context.get('uploading_plan') or admin_context.get('uploading_user_plan'):
-                logger.debug(f"🔧 PHOTO ROUTER - Admin {user_id} uploading plan")
+                logger.debug(f"🔧 Admin {user_id} uploading plan - valid photo input")
                 if await self.handle_plan_upload_photo(update, context):
-                    return
-        
-        # PRIORITY 2: Check if user is in questionnaire mode
+                    return  # Plan upload handled
+            else:
+                # Admin sent photo but not in plan upload mode
+                logger.warning(f"⚠️ Admin {user_id} sent photo outside plan upload flow")
+                await update.message.reply_text(
+                    "❌ شما در حال حاضر در بخش آپلود برنامه نیستید!\n\n"
+                    "💡 برای بازگشت به پنل ادمین: /start"
+                )
+                return
+
+        # Get user data to check payment status and flow
         user_data = await self.data_manager.get_user_data(user_id)
         payment_status = user_data.get('payment_status')
-        user_context = context.user_data.get(user_id, {})
+        course_selected = user_data.get('course_selected')
         
-        logger.debug(f"🔍 PHOTO DEBUG - User {user_id} | Payment: {payment_status} | Active: {user_context.get('questionnaire_active', False)}")
-        
-        # ENHANCED QUESTIONNAIRE DETECTION: Check multiple conditions
-        in_questionnaire_mode = False
-        
-        # Method 1: Check if questionnaire_active flag is set
-        if user_context.get('questionnaire_active', False):
-            in_questionnaire_mode = True
-            logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via active flag")
-        
-        # Method 2: Check if user has approved payment and unfinished questionnaire
-        elif payment_status == 'approved':
-            # Check if user has questionnaire progress 
-            questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
-            if (questionnaire_progress and 
-                not questionnaire_progress.get("completed", False) and 
-                questionnaire_progress.get("current_step", 0) > 0):
-                in_questionnaire_mode = True
-                logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via payment+progress")
-                
-                # AUTO-SET questionnaire_active flag for consistency
-                if user_id not in context.user_data:
-                    context.user_data[user_id] = {}
-                context.user_data[user_id]['questionnaire_active'] = True
-                logger.debug(f"🔧 AUTO-SET questionnaire_active flag for user {user_id}")
-        
-        if in_questionnaire_mode:
-            current_question = await self.questionnaire_manager.get_current_question(user_id)
-            
-            logger.debug(f"🔍 PHOTO DEBUG - User {user_id} | Current question: {current_question is not None}")
-            if current_question:
-                logger.debug(f"🔍 PHOTO DEBUG - User {user_id} | Question type: {current_question.get('type')} | Step: {current_question.get('step')}")
-            
-            if current_question:
-                question_type = current_question.get("type")
-                
-                if question_type == "photo":
-                    logger.debug(f"📝 PHOTO ROUTER - User {user_id} in questionnaire photo step")
-                    await self.handle_questionnaire_photo(update, context)
-                    return
-                else:
-                    # User sent photo but different input type is expected (text, number, etc.)
-                    logger.debug(f"❌ PHOTO ROUTER - User {user_id} sent photo for {question_type} question - showing error")
-                    from input_validator import input_validator
-                    
-                    is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                        update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
-                    )
-                    return  # Error message already sent by validator
-        
-        # PRIORITY 3: Check if user is waiting for coupon code (not photo)
-        if user_context.get('waiting_for_coupon'):
-            logger.debug(f"💰 PHOTO ROUTER - User {user_id} sent photo while waiting for coupon - showing error")
-            from input_validator import input_validator
-            
-            await input_validator.validate_and_reject_wrong_input_type(
-                update, 'coupon_code', "ورود کد تخفیف", is_admin=False
-            )
-            return
-        
-        # PRIORITY 4: Check if user is actively in payment flow
+        logger.debug(f"📊 User {user_id} photo routing - payment_status: {payment_status}, course: {course_selected}")
+
+        # CRITICAL: Check if user is ACTIVELY in payment flow
+        # Don't process photos just because course_selected exists - user might have navigated away
         user_context = context.user_data.get(user_id, {})
         actively_in_payment_flow = (
-            user_context.get('buying_additional_course') or
-            user_id in self.payment_pending or
-            user_context.get('awaiting_payment_receipt')
+            user_context.get('buying_additional_course') or  # Explicit additional course purchase
+            user_id in self.payment_pending or  # In payment_pending state
+            user_context.get('awaiting_payment_receipt')  # Explicitly waiting for receipt
         )
         
-        if actively_in_payment_flow:
-            logger.debug(f"💳 PHOTO ROUTER - User {user_id} in payment flow")
-            await self.handle_payment_receipt(update, context)
+        logger.debug(f"🔍 User {user_id} payment flow validation - actively_in_payment: {actively_in_payment_flow}")
+        
+        # STATE VALIDATION: Check if user is in valid photo input flow
+        
+        # CASE 1: User is buying additional course and should send receipt
+        if user_context.get('buying_additional_course'):
+            logger.debug(f"💳 User {user_id} is purchasing additional course - valid receipt photo")
+            await self.process_new_course_payment(update, context)
             return
-        
-        # FALLBACK: Photo sent outside valid context - REMAIN SILENT
-        # User requested complete silence when no input is expected (like in main menu)
-        logger.debug(f"🔇 PHOTO ROUTER - User {user_id} sent photo outside valid context - remaining silent")
-        # No message sent - complete silence as requested
 
-    async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle ONLY payment receipt photos - called after photo router validation"""
-        user_id = update.effective_user.id
-        user_name = update.effective_user.first_name or "کاربر"
+        # CASE 2: User has approved payment and is in questionnaire photo step
+        if payment_status == 'approved':
+            current_question = await self.questionnaire_manager.get_current_question(user_id)
+            if current_question and current_question.get("type") == "photo":
+                logger.debug(f"🎯 User {user_id} in questionnaire photo step - valid photo input")
+                await self.handle_questionnaire_photo(update, context)
+                return
+            else:
+                # User sent photo but questionnaire doesn't expect it
+                logger.warning(f"⚠️ User {user_id} sent photo but questionnaire doesn't expect photo")
+                questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
+                current_step = questionnaire_status.get('current_step', 1)
+                current_question_text = current_question.get('text', 'سوال فعلی') if current_question else 'سوال موجود نیست'
+                
+                await update.message.reply_text(
+                    f"❌ این مرحله از پرسشنامه نیاز به عکس ندارد!\n\n"
+                    f"📝 شما در حال حاضر در مرحله {current_step} پرسشنامه هستید:\n"
+                    f"{current_question_text}\n\n"
+                    f"💡 لطفاً پاسخ خود را به صورت متن ارسال کنید.\n\n"
+                    f"🔄 برای بازگشت به منو: /start"
+                )
+                return
         
-        logger.debug(f"� Processing payment receipt from user {user_id} ({user_name})")
-        
-        # At this point, the photo router has already validated this is a payment receipt context
-        # So we can proceed directly with payment processing
-        
-        # Get user data and context
-        user_data = await self.data_manager.get_user_data(user_id)
-        user_context = context.user_data.get(user_id, {})
-        course_selected = user_context.get('current_course_selection') or user_data.get('course_selected')
-        
+        # CASE 3: User should select course first
         if not course_selected:
+            logger.warning(f"⚠️ User {user_id} sent photo without selecting course")
             await update.message.reply_text(
                 "❌ ابتدا یک دوره انتخاب کنید!\n\n"
-                "برای شروع /start را بزنید."
+                "🔄 برای شروع /start را بزنید."
             )
             return
 
-        # Handle different payment states
-        payment_status = user_data.get('payment_status')
-        
+        # CASE 4: Handle payment states appropriately
         if payment_status == 'pending_approval':
             logger.warning(f"⚠️ User {user_id} sent duplicate receipt - already pending")
             await update.message.reply_text(
@@ -2330,9 +1996,25 @@ class FootballCoachBot:
                 "🔄 برای بازگشت به منو: /start"
             )
             return
+        
+        # REMOVED: payment_status == 'rejected' case - after /start fix, rejected payments don't persist
 
-        # Process new payment receipt
-        await self.process_new_course_payment(update, context)
+        # CASE 5: NEW payment receipt submission - ONLY if actively in payment flow
+        if actively_in_payment_flow and course_selected and not payment_status:
+            logger.debug(f"💳 Processing new payment receipt for user {user_id} - VALID FLOW")
+            await self.process_new_course_payment(update, context)
+            return
+
+        # FALLBACK: Photo sent in invalid state - user NOT in active payment flow
+        logger.warning(f"⚠️ User {user_id} sent photo OUTSIDE payment flow - payment: {payment_status}, course: {course_selected}, active_flow: {actively_in_payment_flow}")
+        await update.message.reply_text(
+            "❌ در حال حاضر نیاز به ارسال عکس نیست!\n\n"
+            "💡 اگر می‌خواهید:\n"
+            "• دوره جدید خریداری کنید → از منو اقدام کنید\n"
+            "• فیش واریز ارسال کنید → ابتدا دوره را انتخاب کنید\n"
+            "• پرسشنامه تکمیل کنید → باید پرداخت تایید شود\n\n"
+            "🔄 لطفاً /start را بزنید تا به منوی اصلی بروید."
+        )
 
     async def process_new_course_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Process payment receipt for new course purchase"""
@@ -2730,29 +2412,17 @@ class FootballCoachBot:
         if current_question:
             question_type = current_question.get("type")
             
-            # UNIFIED INPUT TYPE VALIDATION for questionnaire documents
-            from input_validator import input_validator
-            
             if question_type == "photo":
-                # User sent document but photo is expected
-                is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                    update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
+                await update.message.reply_text(
+                    "❌ فقط عکس قابل ارسال است!\n\n"
+                    "💡 راهنمای ارسال عکس:\n"
+                    "1️⃣ در گالری گوشی عکس مورد نظر را انتخاب کنید\n"
+                    "2️⃣ روی گزینه 'ارسال به عنوان عکس' کلیک کنید\n"
+                    "3️⃣ از ارسال به عنوان 'فایل' خودداری کنید\n\n"
+                    "📸 فرمت‌های مجاز: JPG, PNG, WebP\n"
+                    "⚠️ ارسال عکس به عنوان فایل پذیرفته نمی‌شود"
                 )
-                return  # Error message already sent
-                
-            elif question_type == "text":
-                # User sent document but text is expected
-                is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                    update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
-                )
-                return  # Error message already sent
-                
-            elif question_type == "number":
-                # User sent document but number is expected
-                is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                    update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
-                )
-                return  # Error message already sent
+                return
             elif question_type == "text_or_document":
                 # Handle PDF documents for training program questions
                 if update.message.document:
@@ -2807,63 +2477,45 @@ class FootballCoachBot:
                 "📝 متن پاسخ خود را بنویسید\n"
                 "📄 یا فایل PDF ارسال کنید"
             )
-        # Handle other document types that are not in questionnaire mode
-        # For documents sent outside of questionnaire or admin context - remain silent
-        # (This matches the requirement for complete silence when no input expected)
+        else:
+            await update.message.reply_text(
+                "❌ نوع فایل پشتیبانی نمی‌شود!\n\n"
+                "📝 می‌توانید پاسخ خود را به صورت متن بنویسید\n"
+                "📸 یا در صورت نیاز عکس ارسال کنید"
+            )
 
     async def handle_unsupported_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle non-document file uploads (video, audio, stickers, etc.)"""
+        """Handle non-document file uploads (video, audio, etc.)"""
         user_id = update.effective_user.id
         
-        # ENHANCED QUESTIONNAIRE DETECTION - Same as photo handler
-        user_data = await self.data_manager.get_user_data(user_id)
-        payment_status = user_data.get('payment_status')
-        user_context = context.user_data.get(user_id, {})
+        # Check if user is in questionnaire mode
+        current_question = await self.questionnaire_manager.get_current_question(user_id)
         
-        logger.debug(f"🔍 UNSUPPORTED FILE DEBUG - User {user_id} | Payment: {payment_status} | Active: {user_context.get('questionnaire_active', False)}")
-        
-        # Check if user is in questionnaire mode using enhanced detection
-        in_questionnaire_mode = False
-        
-        # Method 1: Check if questionnaire_active flag is set
-        if user_context.get('questionnaire_active', False):
-            in_questionnaire_mode = True
-            logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via active flag")
-        
-        # Method 2: Check if user has approved payment and unfinished questionnaire
-        elif payment_status == 'approved':
-            # Check if user has questionnaire progress 
-            questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
-            if (questionnaire_progress and 
-                not questionnaire_progress.get("completed", False) and 
-                questionnaire_progress.get("current_step", 0) > 0):
-                in_questionnaire_mode = True
-                logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via payment+progress")
-                
-                # AUTO-SET questionnaire_active flag for consistency
-                if user_id not in context.user_data:
-                    context.user_data[user_id] = {}
-                context.user_data[user_id]['questionnaire_active'] = True
-                logger.debug(f"🔧 AUTO-SET questionnaire_active flag for user {user_id}")
-        
-        if in_questionnaire_mode:
-            current_question = await self.questionnaire_manager.get_current_question(user_id)
+        if current_question and current_question.get("type") == "photo":
+            await update.message.reply_text(
+                "❌ فقط عکس قابل ارسال است!\n\n"
+                "💡 راهنمای ارسال عکس:\n"
+                "1️⃣ در گالری گوشی عکس مورد نظر را انتخاب کنید\n"
+                "2️⃣ روی گزینه 'ارسال به عنوان عکس' کلیک کنید\n"
+                "3️⃣ از ارسال به عنوان 'فایل' خودداری کنید\n\n"
+                "📸 فرمت‌های مجاز: JPG, PNG, WebP\n"
+                "⚠️ ارسال عکس به عنوان فایل پذیرفته نمی‌شود"
+            )
+            return
+        elif current_question and current_question.get("type") == "text_or_document":
+            await update.message.reply_text(
+                "❌ فقط فایل‌های PDF قابل قبول هستند!\n\n"
+                "💡 می‌توانید:\n"
+                "📝 متن پاسخ خود را بنویسید\n"
+                "📄 یا فایل PDF ارسال کنید"
+            )
+            return
             
-            if current_question:
-                question_type = current_question.get("type")
-                
-                logger.debug(f"❌ UNSUPPORTED FILE - User {user_id} sent unsupported file for {question_type} question - showing error")
-                
-                # UNIFIED INPUT TYPE VALIDATION for unsupported files
-                from input_validator import input_validator
-                
-                is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                    update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
-                )
-                return  # Error message already sent by validator
-        
-        # For unsupported files sent outside questionnaire mode - remain silent
-        # (This matches the requirement for complete silence when no input expected)
+        # For other file types
+        await update.message.reply_text(
+            "❌ نوع فایل پشتیبانی نمی‌شود!\n\n"
+            "📝 لطفاً پاسخ خود را به صورت متن ارسال کنید"
+        )
 
     async def handle_payment_approval(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle admin payment approval/rejection and user profile viewing"""
@@ -3568,48 +3220,23 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         text_input = update.message.text
         
-        # COMPREHENSIVE DEBUG LOGGING for text input issue
-        logger.info(f"🔍 TEXT INPUT HANDLER - User {user_id}: '{text_input[:50]}...'")
-        logger.debug(f"� Context user_data keys for user: {list(context.user_data.get(user_id, {}).keys())}")
+        # LOG ALL TEXT INPUT for debugging
+        logger.debug(f"📝 Text input from user {user_id}: '{text_input[:50]}...'")
         
         # STEP 1: Check if user is EXPLICITLY waiting for text input
         explicitly_waiting_for_text = await self._is_user_waiting_for_text_input(user_id, context)
         
-        logger.info(f"🎯 TEXT INPUT DECISION - User {user_id}: waiting_for_text = {explicitly_waiting_for_text}")
-        
         if not explicitly_waiting_for_text:
             # CORE FIX: Completely ignore random text - no processing, no responses
-            logger.info(f"🔇 IGNORING random text from user {user_id} - not in text input mode")
-            
-            # DEBUG: Log questionnaire flow decision for ignored text with enhanced context
-            await admin_error_handler.log_questionnaire_flow_debug(
-                user_id=user_id,
-                context="text_input_ignored",
-                questionnaire_data=context.user_data.get(user_id, {}),
-                flow_decision="ignore_text_not_waiting",
-                details={
-                    'text_input_preview': text_input[:50],
-                    'user_context_keys': list(context.user_data.get(user_id, {}).keys()),
-                    'questionnaire_active_flag': context.user_data.get(user_id, {}).get('questionnaire_active', False),
-                    'questionnaire_activated_at': context.user_data.get(user_id, {}).get('questionnaire_activated_at', 'never'),
-                    'auto_fix_attempted': False,  # This will be true when we add auto-fix
-                    'validation_reason': 'flag_missing_or_false'
-                }
-            )
+            logger.debug(f"🔇 IGNORING random text from user {user_id} - not in text input mode")
             return
         
         # STEP 2: User IS in valid text input mode - route to appropriate handler
-        logger.info(f"✅ PROCESSING TEXT INPUT - User {user_id} in valid text input mode")
         await self._route_text_to_handler(update, context, text_input)
 
     async def _is_user_waiting_for_text_input(self, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Check if user is explicitly waiting for text input"""
         user_context = context.user_data.get(user_id, {})
-        
-        # COMPREHENSIVE DEBUG for questionnaire text input validation
-        logger.debug(f"🔍 TEXT INPUT VALIDATION - User {user_id}")
-        logger.debug(f"  User context keys: {list(user_context.keys())}")
-        logger.debug(f"  questionnaire_active flag: {user_context.get('questionnaire_active', False)}")
         
         # ADMIN TEXT INPUT STATES
         if await self.admin_panel.admin_manager.is_admin(user_id):
@@ -3625,59 +3252,22 @@ class FootballCoachBot:
         # USER TEXT INPUT STATES
         user_waiting_states = [
             'waiting_for_coupon',  # Explicitly waiting for coupon code
-            'awaiting_payment_receipt',  # Waiting for payment receipt photo (not text)
         ]
         if any(user_context.get(state) for state in user_waiting_states):
             return True
         
-        # QUESTIONNAIRE ACTIVE STATE - ENHANCED CHECK with fallback to questionnaire data
-        # KEY FIX: Check for questionnaire_active flag, not just having unfinished questionnaire data
-        questionnaire_active_flag = user_context.get('questionnaire_active', False)
-        logger.debug(f"  questionnaire_active flag: {questionnaire_active_flag}")
-        
-        # FALLBACK CHECK: If flag is missing, check if user has active questionnaire progress
-        if not questionnaire_active_flag:
-            logger.debug(f"  Flag missing - checking questionnaire progress as fallback")
-            fallback_progress = await self.questionnaire_manager.load_user_progress(user_id)
-            if fallback_progress and not fallback_progress.get("completed", False) and fallback_progress.get("current_step", 0) > 0:
-                # User has active questionnaire but flag is missing - auto-set flag
-                logger.warning(f"  ⚠️ AUTO-FIXING: User {user_id} has active questionnaire but missing flag")
-                user_context['questionnaire_active'] = True
-                questionnaire_active_flag = True
-                logger.info(f"  ✅ AUTO-SET questionnaire_active flag for user {user_id}")
-        
-        if questionnaire_active_flag:
-            logger.debug(f"  ✅ questionnaire_active flag is TRUE - checking questionnaire progress")
-            questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
-            logger.debug(f"  Questionnaire progress loaded: {questionnaire_progress is not None}")
-            if questionnaire_progress:
-                logger.debug(f"  Progress details: completed={questionnaire_progress.get('completed', False)}, current_step={questionnaire_progress.get('current_step', 0)}")
+        # QUESTIONNAIRE ACTIVE STATE - check if user has active questionnaire session
+        questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
+        if (questionnaire_progress is not None and 
+            not questionnaire_progress.get("completed", False) and
+            questionnaire_progress.get("current_step", 0) > 0):
             
-            if questionnaire_progress is not None:
-                # Regular questionnaire mode
-                if (not questionnaire_progress.get("completed", False) and
-                    questionnaire_progress.get("current_step", 0) > 0):
-                    
-                    # Double-check current question exists
-                    current_question = await self.questionnaire_manager.get_current_question(user_id)
-                    logger.debug(f"  Current question exists: {current_question is not None}")
-                    if current_question:
-                        logger.debug(f"  📝 ACCEPTING TEXT INPUT - User {user_id} in active questionnaire")
-                        return True
-                    else:
-                        logger.debug(f"  ❌ REJECTING TEXT INPUT - No current question available")
-                
-                # Edit mode
-                if questionnaire_progress.get("edit_mode", False):
-                    logger.debug(f"  📝 ACCEPTING TEXT INPUT - User {user_id} in questionnaire edit mode")
-                    return True
-            else:
-                logger.debug(f"  ❌ REJECTING TEXT INPUT - No questionnaire progress found despite active flag")
-        else:
-            logger.debug(f"  ❌ questionnaire_active flag is FALSE or missing")
+            # Double-check current question exists
+            current_question = await self.questionnaire_manager.get_current_question(user_id)
+            if current_question:
+                return True
         
         # Default: User is NOT waiting for text input
-        logger.debug(f"  ❌ FINAL DECISION: NOT waiting for text input")
         return False
 
     async def _route_text_to_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text_input: str):
@@ -3698,43 +3288,18 @@ class FootballCoachBot:
                 return
         
         # USER HANDLERS
-        # Payment receipt input - expecting photo, not text
-        if user_context.get('awaiting_payment_receipt'):
-            # UNIFIED INPUT TYPE VALIDATION for payment receipt
-            from input_validator import input_validator
-            
-            await input_validator.validate_and_reject_wrong_input_type(
-                update, 'photo', "ارسال رسید پرداخت", is_admin=False
-            )
-            return
-        
         # Coupon input
         if user_context.get('waiting_for_coupon'):
-            # UNIFIED INPUT TYPE VALIDATION for coupon input
-            from input_validator import input_validator
-            
-            is_valid = await input_validator.validate_and_reject_wrong_input_type(
-                update, 'coupon_code', "ورود کد تخفیف", is_admin=False
-            )
-            if not is_valid:
-                return
-            
             await self.handle_coupon_code(update, context, text_input)
             return
         
-        # Questionnaire input - handle both normal and edit modes
+        # Questionnaire input - delegate to existing questionnaire handler
         questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
-        if questionnaire_progress is not None:
-            # Edit mode
-            if questionnaire_progress.get("edit_mode", False):
-                await self._handle_edit_mode_text_input(update, context, text_input)
-                return
-            
-            # Normal questionnaire mode
-            if (not questionnaire_progress.get("completed", False) and
-                questionnaire_progress.get("current_step", 0) > 0):
-                await self._handle_questionnaire_text_input(update, context, text_input)
-                return
+        if (questionnaire_progress is not None and 
+            not questionnaire_progress.get("completed", False) and
+            questionnaire_progress.get("current_step", 0) > 0):
+            await self._handle_questionnaire_text_input(update, context, text_input)
+            return
         
         # Should never reach here due to _is_user_waiting_for_text_input check
         logger.warning(f"⚠️ Text routed to handler but no valid state found for user {user_id}")
@@ -3751,19 +3316,6 @@ class FootballCoachBot:
                 "❌ خطا در بارگذاری سوال فعلی.\n\n"
                 "لطفاً از /start استفاده کنید."
             )
-            return
-        
-        # UNIFIED INPUT TYPE VALIDATION - Check if text is appropriate for this question type
-        from input_validator import input_validator
-        question_type = current_question.get('type', 'text')
-        
-        # Pre-validate input type before content validation
-        is_type_valid = await input_validator.validate_and_reject_wrong_input_type(
-            update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
-        )
-        
-        if not is_type_valid:
-            # Error message already sent by validator
             return
         
         # Process questionnaire answer - reuse existing logic
@@ -3806,11 +3358,6 @@ class FootballCoachBot:
         else:
             await self.complete_questionnaire_from_text(update, context)
 
-    async def _handle_edit_mode_text_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text_input: str) -> None:
-        """Handle text input during questionnaire edit mode"""
-        user_id = update.effective_user.id
-        await self.questionnaire_manager.update_answer_in_edit_mode(update, context, user_id, text_input)
-
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         DEPRECATED: This method is no longer used.
@@ -3823,6 +3370,177 @@ class FootballCoachBot:
         
         # Route to new system
         await self.handle_text_input(update, context)
+                logger.debug(f"🔧 Admin {user_id} uploading plan - valid text input")
+                await self.handle_plan_upload_text(update, context, text_answer)
+                return
+            
+            # CASE 3: Admin sent text but not in valid input flow
+            logger.warning(f"⚠️ Admin {user_id} sent text outside valid input flow")
+            await update.message.reply_text(
+                "❌ شما در حال حاضر در بخش ورود اطلاعات نیستید!\n\n"
+                "💡 برای بازگشت به پنل ادمین: /start"
+            )
+            return
+
+        # USER INPUT STATE VALIDATION
+        user_data = await self.data_manager.get_user_data(user_id)
+        user_status = await self.get_user_status(user_data)
+        
+        # CRITICAL: Check if user is ACTIVELY in text input flow
+        user_context = context.user_data.get(user_id, {})
+        
+        # Check if user has EXPLICIT questionnaire session active
+        questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
+        has_active_questionnaire = (
+            questionnaire_progress is not None and 
+            not questionnaire_progress.get("completed", False) and
+            questionnaire_progress.get("current_step", 0) > 0
+        )
+        
+        actively_in_text_input_flow = (
+            user_context.get('waiting_for_coupon') or  # Waiting for coupon code
+            has_active_questionnaire  # Has EXPLICIT active questionnaire session
+        )
+        
+        logger.debug(f"👤 User {user_id} status: {user_status}, has_questionnaire: {has_active_questionnaire}, active_text_input: {actively_in_text_input_flow}")
+        
+        # CASE 1: User in payment pending - very limited text input allowed
+        if user_status == 'payment_pending':
+            # Only allow coupon input if explicitly waiting for coupon
+            if context.user_data.get('waiting_for_coupon'):
+                logger.debug(f"💰 User {user_id} entering coupon code - valid text input")
+                await self.handle_coupon_code(update, context, text_answer)
+                return
+            else:
+                logger.warning(f"⚠️ User {user_id} sent text during payment pending (no coupon mode)")
+                await update.message.reply_text(
+                    "⏳ در حال بررسی پرداخت شما توسط ادمین هستیم.\n\n"
+                    "📸 لطفا فقط فیش واریز ارسال کنید و منتظر تایید بمانید.\n"
+                    "💬 پس از تایید، پرسشنامه برایتان ارسال خواهد شد.\n\n"
+                    "🔄 برای بازگشت به منو: /start"
+                )
+                return
+        
+        # REMOVED: Payment rejected case - after /start fix, rejected payments don't persist
+        
+        # CASE 2: General coupon code input (when waiting for coupon)
+        if context.user_data.get('waiting_for_coupon'):
+            logger.debug(f"💰 User {user_id} entering coupon code - valid text input")
+            await self.handle_coupon_code(update, context, text_answer)
+            return
+        
+        # CASE 4: User not in valid text input flow
+        if not actively_in_text_input_flow:
+            course_selected = user_data.get('course_selected')
+            payment_status = user_data.get('payment_status')
+            
+            logger.warning(f"⚠️ User {user_id} sent text OUTSIDE valid input flow - status: {user_status}")
+            
+            # REMOVED: Automatic questionnaire prompting for approved users
+            # After /start, users should use the menu system, not get questionnaire prompts for random text
+            
+            if course_selected and not payment_status:
+                # User selected course but should upload receipt, not send text
+                await update.message.reply_text(
+                    "💳 شما دوره را انتخاب کرده‌اید اما هنوز فیش واریز ارسال نکرده‌اید.\n\n"
+                    "📸 لطفاً فیش واریز یا اسکرین‌شات پرداخت خود را ارسال کنید.\n\n"
+                    "⚠️ توجه: فقط عکس (تصویر) ارسال کنید، نه متن!\n\n"
+                    "🔄 برای بازگشت به منو: /start"
+                )
+            elif payment_status == 'pending_approval':
+                # User has pending payment, should wait
+                await update.message.reply_text(
+                    "⏳ در حال بررسی پرداخت شما توسط ادمین هستیم.\n\n"
+                    "📱 پس از تایید، پرسشنامه برایتان ارسال خواهد شد.\n"
+                    "💬 لطفا صبر کنید و متن ارسال نکنید.\n\n"
+                    "🔄 برای بازگشت به منو: /start"
+                )
+            else:
+                # UNIVERSAL RESPONSE: Any user sending random text gets redirected to menu
+                # This includes approved users who should use the menu system instead of typing text
+                keyboard = [
+                    [InlineKeyboardButton("� منوی اصلی", callback_data='back_to_user_menu')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    "� برای استفاده از ربات از منوی اصلی استفاده کنید.\n\n"
+                    "👇 برای دسترسی به منو دکمه زیر را بزنید:",
+                    reply_markup=reply_markup
+                )
+            return
+
+        # CASE 5: QUESTIONNAIRE TEXT INPUT - Only valid case for payment_approved users
+        current_question = await self.questionnaire_manager.get_current_question(user_id)
+        
+        # CRITICAL VALIDATION: Ensure questionnaire is actually active
+        if not current_question:
+            # User is not in active questionnaire mode
+            logger.warning(f"⚠️ User {user_id} sent text but no active questionnaire")
+            admin_error_handler.admin_logger.info(
+                f"TEXT INPUT OUTSIDE QUESTIONNAIRE - User {user_id} | No active questionnaire | Text: {text_answer[:20]}"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("📝 شروع پرسشنامه", callback_data='start_questionnaire')],
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "شما در حال حاضر در مرحله پرسشنامه نیستید.\n\n"
+                "👇 برای شروع پرسشنامه دکمه زیر را بزنید:",
+                reply_markup=reply_markup
+            )
+            return
+        
+        # VALID QUESTIONNAIRE INPUT - Process the answer
+        logger.debug(f"📝 User {user_id} answering questionnaire step {current_question.get('step')} - valid text input")
+        
+        # Get the current step from the question
+        current_step = current_question.get('step', 1)
+        
+        # Validate and submit the answer
+        is_valid, error_msg = self.questionnaire_manager.validate_answer(current_step, text_answer)
+        
+        if not is_valid:
+            # Send error message
+            await update.message.reply_text(f"❌ {error_msg}")
+            return
+        
+        # Submit the answer
+        result = await self.questionnaire_manager.process_answer(user_id, text_answer)
+        
+        if result["status"] == "error":
+            # Send error message
+            await update.message.reply_text(f"❌ {result['message']}")
+            return
+        elif result["status"] == "completed":
+            # Questionnaire completed
+            await self.complete_questionnaire_from_text(update, context)
+            return
+        
+        # Continue with next question
+        question = result["question"]
+        if question:
+            # Show next question
+            message = f"""{result['progress_text']}
+
+{question['text']}"""
+            
+            keyboard = []
+            if question.get('type') == 'choice':
+                choices = question.get('choices', [])
+                for choice in choices:
+                    keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+            else:
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(message, reply_markup=reply_markup)
+        else:
+            # Something went wrong, proceed to completion  
+            await self.complete_questionnaire_from_text(update, context)
+
     async def complete_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle questionnaire completion from callback"""
         query = update.callback_query
@@ -3832,11 +3550,6 @@ class FootballCoachBot:
         states_cleared = await admin_error_handler.clear_all_input_states(
             context, user_id, "questionnaire_completion_callback"
         )
-        
-        # CRITICAL FIX: Clear questionnaire_active flag on completion
-        if user_id in context.user_data and 'questionnaire_active' in context.user_data[user_id]:
-            context.user_data[user_id]['questionnaire_active'] = False
-            logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} on completion")
         
         # Log questionnaire completion
         admin_error_handler.admin_logger.info(
@@ -3918,11 +3631,6 @@ class FootballCoachBot:
         result = await self.questionnaire_manager.start_questionnaire(user_id)
         
         if result["status"] == "success":
-            # CRITICAL FIX: Set questionnaire_active flag for text input routing
-            if user_id not in context.user_data:
-                context.user_data[user_id] = {}
-            context.user_data[user_id]['questionnaire_active'] = True
-            
             question = result["question"]
             message = f"""{result['progress_text']}
 
@@ -3963,24 +3671,15 @@ class FootballCoachBot:
 
             user_id = update.effective_user.id
             
-            # COMPREHENSIVE STATE CLEARING - clear EVERYTHING except questionnaire
+            # COMPREHENSIVE STATE CLEARING - clear EVERYTHING
             states_cleared = await admin_error_handler.clear_all_input_states(
                 context, user_id, "back_to_user_menu - FORCE CLEAN STATE"
             )
             
-            # DON'T RESET QUESTIONNAIRE PROGRESS - preserve questionnaire state
-            # This ensures users can go back without losing their questionnaire progress
-            # questionnaire_reset = await admin_error_handler.reset_questionnaire_state(
-            #     user_id, self.questionnaire_manager, "back_to_user_menu - FORCE RESET"
-            # )
-            
-            # CRITICAL FIX: Clear questionnaire_active flag but preserve questionnaire data
-            # User exits active questionnaire session but keeps progress for later
-            if user_id in context.user_data and 'questionnaire_active' in context.user_data[user_id]:
-                context.user_data[user_id]['questionnaire_active'] = False
-                logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} via back button (progress preserved)")
-            
-            logger.info(f"👤 PRESERVING QUESTIONNAIRE STATE - User {user_id} | back_to_user_menu preserves progress")
+            # RESET QUESTIONNAIRE PROGRESS - complete reset
+            questionnaire_reset = await admin_error_handler.reset_questionnaire_state(
+                user_id, self.questionnaire_manager, "back_to_user_menu - FORCE RESET"
+            )
             
             # Clear payment_pending if exists
             if user_id in self.payment_pending:
@@ -3994,18 +3693,17 @@ class FootballCoachBot:
                 )
                 states_cleared.extend(admin_states_cleared)
             
-            # Log comprehensive cleanup (questionnaire preserved)
+            # Log comprehensive cleanup
             admin_error_handler.admin_logger.info(
-                f"BACK TO MENU CLEANUP - User {user_id} | Total states cleared: {len(states_cleared)} | Questionnaire preserved"
+                f"BACK TO MENU CLEANUP - User {user_id} | Total states cleared: {len(states_cleared)}"
             )
             
             user_data = await self.data_manager.get_user_data(user_id)
             user_data['user_id'] = user_id  # Ensure user_id is set
             user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
             
-            # ALWAYS show simple unified menu - same as /start command
-            # This ensures consistent behavior when using back button
-            await self.show_simple_unified_menu(update, context, user_data, user_name)
+            # ALWAYS show status-based menu - this is the main hub
+            await self.show_status_based_menu(update, context, user_data, user_name)
             
         except Exception as e:
             user_id = update.effective_user.id if update.effective_user else "unknown"
@@ -4154,8 +3852,6 @@ class FootballCoachBot:
             await self.purchase_additional_course(update, context)
         elif query.data == 'restart_questionnaire':
             await self.restart_questionnaire(update, context)
-        elif query.data == 'edit_questionnaire':
-            await self.edit_questionnaire(update, context)
         elif query.data == 'view_program':
             await self.show_training_program(update, context, user_data)
         elif query.data == 'contact_support':
@@ -4255,11 +3951,6 @@ class FootballCoachBot:
         # Get current question and show it
         current_question = await self.questionnaire_manager.get_current_question(user_id)
         if current_question:
-            # CRITICAL FIX: Set questionnaire_active flag when continuing questionnaire
-            if user_id not in context.user_data:
-                context.user_data[user_id] = {}
-            context.user_data[user_id]['questionnaire_active'] = True
-            
             question_text = f"""{current_question['progress_text']}
 
 {current_question['text']}"""
@@ -4283,12 +3974,6 @@ class FootballCoachBot:
             
             # Start questionnaire
             progress = await self.questionnaire_manager.start_questionnaire(user_id)
-            
-            # CRITICAL FIX: Set questionnaire_active flag when starting new questionnaire from continue
-            if user_id not in context.user_data:
-                context.user_data[user_id] = {}
-            context.user_data[user_id]['questionnaire_active'] = True
-            
             first_question = await self.questionnaire_manager.get_current_question(user_id)
             
             if first_question:
@@ -4389,7 +4074,9 @@ class FootballCoachBot:
         # Action buttons based on status
         keyboard = []
         
-        if status == 'payment_pending':
+        if status == 'new_user' or (not purchased_courses and not user_payments):
+            keyboard.append([InlineKeyboardButton("🛒 خرید اولین دوره", callback_data='new_course')])
+        elif status == 'payment_pending':
             keyboard.append([InlineKeyboardButton("🔄 بررسی مجدد پرداخت", callback_data='check_payment_status')])
         elif status == 'payment_approved':
             # Check if user has nutrition plan - handle differently
@@ -4530,100 +4217,6 @@ class FootballCoachBot:
             await self.questionnaire_manager.send_question(context.bot, user_id, question)
         else:
             await query.edit_message_text("❌ خطا در شروع مجدد پرسشنامه.")
-
-    async def edit_questionnaire(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Start questionnaire editing mode for completed questionnaires"""
-        query = update.callback_query
-        user_id = update.effective_user.id
-        
-        try:
-            # Check if questionnaire is completed
-            questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
-            if not questionnaire_status.get('completed', False):
-                await query.edit_message_text(
-                    "❌ فقط پرسشنامه‌های تکمیل شده قابل ویرایش هستند.\n\n"
-                    "لطفاً ابتدا پرسشنامه را تکمیل کنید."
-                )
-                return
-            
-            # Start edit mode
-            result = await self.questionnaire_manager.start_edit_mode(user_id)
-            if result["status"] == "success":
-                question = result["question"]
-                current_answer = result["current_answer"]
-                
-                # Display current question with current answer and navigation buttons
-                answer_text = f"\n\n💡 پاسخ فعلی: {current_answer}" if current_answer else ""
-                message = f"✏️ حالت ویرایش پرسشنامه\n\n{question['text']}{answer_text}\n\n📝 پاسخ جدید خود را وارد کنید یا از دکمه‌های ناوبری استفاده کنید:"
-                
-                keyboard = [
-                    [InlineKeyboardButton("⬅️ سوال قبلی", callback_data='edit_prev'),
-                     InlineKeyboardButton("➡️ سوال بعدی", callback_data='edit_next')],
-                    [InlineKeyboardButton("✅ اتمام ویرایش", callback_data='finish_edit')],
-                    [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
-                ]
-                
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(message, reply_markup=reply_markup)
-            else:
-                await query.edit_message_text(f"❌ خطا در شروع ویرایش: {result['message']}")
-                
-        except Exception as e:
-            logger.error(f"Error in edit_questionnaire for user {user_id}: {e}")
-            await query.edit_message_text("❌ خطا در شروع ویرایش پرسشنامه.")
-
-    async def handle_edit_navigation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle navigation in edit mode (prev/next buttons)"""
-        query = update.callback_query
-        user_id = update.effective_user.id
-        action = query.data  # 'edit_prev' or 'edit_next'
-        
-        try:
-            direction = 'previous' if action == 'edit_prev' else 'next'
-            result = await self.questionnaire_manager.navigate_edit_mode(user_id, direction)
-            
-            if result["status"] == "success":
-                question = result["question"]
-                current_answer = result["current_answer"]
-                
-                # Display question with current answer and navigation buttons
-                answer_text = f"\n\n💡 پاسخ فعلی: {current_answer}" if current_answer else ""
-                message = f"✏️ حالت ویرایش پرسشنامه - سوال {result.get('current_step', '?')}\n\n{question['text']}{answer_text}\n\n📝 پاسخ جدید خود را وارد کنید یا از دکمه‌های ناوبری استفاده کنید:"
-                
-                keyboard = [
-                    [InlineKeyboardButton("⬅️ سوال قبلی", callback_data='edit_prev'),
-                     InlineKeyboardButton("➡️ سوال بعدی", callback_data='edit_next')],
-                    [InlineKeyboardButton("✅ اتمام ویرایش", callback_data='finish_edit')],
-                    [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
-                ]
-                
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(message, reply_markup=reply_markup)
-            else:
-                await query.answer(result['message'], show_alert=True)
-                
-        except Exception as e:
-            logger.error(f"Error in handle_edit_navigation for user {user_id}: {e}")
-            await query.answer("❌ خطا در ناوبری", show_alert=True)
-
-    async def finish_edit_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Finish questionnaire editing and return to main menu"""
-        query = update.callback_query
-        user_id = update.effective_user.id
-        
-        try:
-            # Finish edit mode
-            result = await self.questionnaire_manager.finish_edit_mode(user_id)
-            if result["status"] == "success":
-                await query.answer("✅ ویرایش با موفقیت ذخیره شد!", show_alert=True)
-                # Return to main menu
-                await self.back_to_user_menu(update, context)
-            else:
-                await query.edit_message_text(f"❌ خطا در ذخیره تغییرات: {result['message']}")
-                
-        except Exception as e:
-            logger.error(f"Error in finish_edit_mode for user {user_id}: {e}")
-            await query.edit_message_text("❌ خطا در ذخیره تغییرات.")
 
     async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show user's training program"""
@@ -4798,10 +4391,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_questionnaire_choice, pattern='^q_answer_'))
     application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_|allow_extra_receipt_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_grant_receipt_approval, pattern='^grant_receipt_'))
-    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
-    # Edit mode navigation handlers
-    application.add_handler(CallbackQueryHandler(bot.handle_edit_navigation, pattern='^(edit_prev|edit_next)$'))
-    application.add_handler(CallbackQueryHandler(bot.finish_edit_mode, pattern='^finish_edit$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_main, pattern='^back_to_main$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_user_menu, pattern='^back_to_user_menu$'))
     application.add_handler(CallbackQueryHandler(bot.back_to_course_selection, pattern='^back_to_course_selection$'))
@@ -4819,7 +4409,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^admin_'))
     
     # Handle photo messages (payment receipts and questionnaire photos)
-    application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo_input))
+    application.add_handler(MessageHandler(filters.PHOTO, bot.handle_payment_receipt))
     
     # Handle document uploads (PDF for questionnaire, CSV for admin)
     application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_document))

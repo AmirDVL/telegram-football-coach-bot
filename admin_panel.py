@@ -112,9 +112,41 @@ class AdminPanel:
         elif callback_data == 'admin_debug':
             await self.show_debug_panel(query, user_id)
             
-        # Plan management callbacks - THIS IS THE FIX!
+        # New plan management callbacks - Person-centric approach
+        elif callback_data.startswith('user_plans_'):
+            logger.info(f"🎯 ROUTING: user_plans_ -> {callback_data}")
+            user_id = callback_data.split('_', 2)[2]
+            await self.show_user_course_plans(query, user_id)
+        elif callback_data.startswith('manage_user_course_'):
+            logger.info(f"🎯 ROUTING: manage_user_course_ -> {callback_data}")
+            parts = callback_data.split('_', 3)
+            user_id, course_code = parts[3].split('_', 1)
+            await self.show_user_course_plan_management(query, user_id, course_code)
+        elif callback_data.startswith('confirm_delete_'):
+            logger.info(f"🎯 ROUTING: confirm_delete_ -> {callback_data}")
+            # confirm_delete_USER_ID_COURSE_CODE_PLAN_ID
+            parts = callback_data.replace('confirm_delete_', '').split('_')
+            if len(parts) >= 4:
+                user_id = parts[0]
+                if len(parts) >= 5 and parts[1] == 'in' and parts[2] == 'person':
+                    course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
+                    plan_id = '_'.join(parts[4:])
+                elif len(parts) >= 4 and parts[1] == 'online':
+                    course_code = f"{parts[1]}_{parts[2]}"
+                    plan_id = '_'.join(parts[3:])
+                else:
+                    course_code = parts[1]
+                    plan_id = '_'.join(parts[2:])
+                await self.handle_confirm_delete_user_plan(query, user_id, course_code, plan_id)
+            else:
+                await query.answer("❌ خطا در تجزیه دستور!")
+        elif callback_data.startswith(('upload_user_plan_', 'send_user_plan_', 'view_user_plan_', 'delete_user_plan_', 'send_latest_plan_')):
+            logger.info(f"🎯 ROUTING: new plan management callback -> {callback_data}")
+            await self.handle_new_plan_callback_routing(query, context)
+            
+        # Legacy plan management callbacks (keeping for backward compatibility)
         elif callback_data.startswith(('plan_course_', 'upload_plan_', 'send_plan_', 'view_plans_', 'send_to_user_', 'send_to_all_', 'view_plan_')):
-            logger.info(f"Routing plan management callback: {callback_data}")
+            logger.info(f"Routing legacy plan management callback: {callback_data}")
             await self.handle_plan_callback_routing(query, context)
             
         # Export callbacks
@@ -137,7 +169,7 @@ class AdminPanel:
         elif callback_data.startswith('export_user_'):
             # Handle user-specific export
             export_user_id = callback_data.replace('export_user_', '')
-            await self.export_user_personal_data(query, export_user_id)
+            await self.export_user_personal_data(query, export_user_id, context)
         
         # Coupon management callbacks
         elif callback_data == 'admin_view_coupons':
@@ -162,6 +194,10 @@ class AdminPanel:
             await self.handle_add_admin(query, user_id)
         elif callback_data.startswith('admin_remove_admin_'):
             await self.handle_remove_admin(query, user_id)
+        
+        # Plan upload management
+        elif callback_data == 'skip_plan_description':
+            await self.handle_skip_plan_description(query, context)
         
         # Navigation callbacks
         elif callback_data == 'admin_back_main':
@@ -602,6 +638,10 @@ class AdminPanel:
     
     async def back_to_admin_main(self, query, user_id: int) -> None:
         """Return to unified admin command hub"""
+        # Clear admin-specific input states when navigating back to main admin
+        from admin_error_handler import admin_error_handler
+        await admin_error_handler.clear_admin_input_states(self, user_id, "back_to_admin_main")
+        
         await self.show_unified_admin_panel(query, user_id)
     
     async def back_to_admin_start(self, query, user_id: int) -> None:
@@ -1107,7 +1147,14 @@ class AdminPanel:
             with open(questionnaire_file, 'r', encoding='utf-8') as f:
                 questionnaire_data = json.load(f)
             
-            if not questionnaire_data:
+            # Filter out non-user data (responses, photos, completed are not user IDs)
+            # Only process entries that look like user IDs (numeric strings)
+            user_questionnaires = {}
+            for key, value in questionnaire_data.items():
+                if key.isdigit() and isinstance(value, dict):
+                    user_questionnaires[key] = value
+            
+            if not user_questionnaires:
                 await query.edit_message_text(
                     "📭 هیچ پرسشنامه‌ای تکمیل نشده است!",
                     reply_markup=InlineKeyboardMarkup([
@@ -1131,7 +1178,7 @@ class AdminPanel:
             writer.writerow(headers)
             
             # Write questionnaire data
-            for user_id, user_progress in questionnaire_data.items():
+            for user_id, user_progress in user_questionnaires.items():
                 answers = user_progress.get('answers', {})
                 photos = answers.get('photos', {})
                 
@@ -1141,7 +1188,12 @@ class AdminPanel:
                 for step_photos in photos.values():
                     if isinstance(step_photos, list):
                         photo_count += len(step_photos)
-                        photo_file_ids.extend(step_photos)  # These are file_ids, not file_paths
+                        # Extract file_ids from the photo objects
+                        for photo in step_photos:
+                            if isinstance(photo, dict) and 'file_id' in photo:
+                                photo_file_ids.append(photo['file_id'])
+                            elif isinstance(photo, str):
+                                photo_file_ids.append(photo)  # Legacy format
                 
                 row = [
                     user_id,
@@ -1175,17 +1227,21 @@ class AdminPanel:
             
             csv_content = output.getvalue()
             
-            # Send CSV file
+            # Send CSV file with BOM for proper Persian text display in Excel
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"questionnaire_export_{timestamp}.csv"
             
+            # Add BOM (Byte Order Mark) for UTF-8 to ensure proper display in Excel
+            csv_bytes = '\ufeff'.encode('utf-8') + csv_content.encode('utf-8')
+            
             await query.message.reply_document(
-                document=io.BytesIO(csv_content.encode('utf-8')),
+                document=io.BytesIO(csv_bytes),
                 filename=filename,
                 caption=f"📤 صادرات پرسشنامه‌ها\n\n"
-                       f"📊 تعداد: {len(questionnaire_data)} پرسشنامه\n"
+                       f"📊 تعداد: {len(user_questionnaires)} پرسشنامه\n"
                        f"📷 شامل اطلاعات عکس‌ها\n"
-                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                       f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}\n"
+                       f"💡 برای نمایش صحیح فارسی، با Excel باز کنید"
             )
             
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
@@ -1193,6 +1249,13 @@ class AdminPanel:
             await query.edit_message_text("✅ فایل CSV پرسشنامه‌ها ارسال شد!", reply_markup=reply_markup)
             
         except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                update=query,
+                context=None,
+                error=e,
+                operation_context="export_questionnaire_csv",
+                admin_id=query.from_user.id
+            )
             await query.edit_message_text(f"❌ خطا در صادرات پرسشنامه‌ها: {str(e)}")
 
     async def show_completed_users_list(self, query) -> None:
@@ -1219,23 +1282,39 @@ class AdminPanel:
             users = bot_data.get('users', {})
             completed_users = []
             
+            # Filter out system keys and only process user IDs (numeric strings)
             for user_id, q_data in questionnaire_data.items():
-                if q_data.get('completed', False):
+                # Skip system keys like 'responses', 'photos', 'completed'
+                if not user_id.isdigit():
+                    continue
+                    
+                # Check if user has completed questionnaire or has any answers
+                if not isinstance(q_data, dict):
+                    continue
+                    
+                # Include users who have completed OR have some answers
+                has_answers = bool(q_data.get('answers', {}))
+                is_completed = q_data.get('completed', False)
+                
+                if has_answers or is_completed:
                     user_info = users.get(user_id, {})
                     user_name = user_info.get('name', 'نامشخص')
                     user_phone = user_info.get('phone', 'نامشخص')
                     completion_date = q_data.get('completion_timestamp', q_data.get('completed_at', ''))
                     
-                    # Count photos correctly from photos object
-                    photos = q_data.get('answers', {}).get('photos', {})
+                    # Count photos correctly from answers
+                    answers = q_data.get('answers', {})
                     photos_count = 0
-                    for step_photos in photos.values():
-                        if isinstance(step_photos, list):
-                            photos_count += len(step_photos)
+                    documents_count = 0
                     
-                    # Count documents
-                    documents = q_data.get('answers', {}).get('documents', {})
-                    documents_count = len(documents)
+                    # Count photos and documents from answers
+                    for step_key, step_value in answers.items():
+                        if step_key == 'photos' and isinstance(step_value, dict):
+                            for step_photos in step_value.values():
+                                if isinstance(step_photos, list):
+                                    photos_count += len(step_photos)
+                        elif step_key == 'documents' and isinstance(step_value, dict):
+                            documents_count = len(step_value)
                     
                     completed_users.append({
                         'user_id': user_id,
@@ -1243,12 +1322,13 @@ class AdminPanel:
                         'phone': user_phone,
                         'completion_date': completion_date,
                         'photos_count': photos_count,
-                        'documents_count': documents_count
+                        'documents_count': documents_count,
+                        'is_completed': is_completed
                     })
             
             if not completed_users:
                 await query.edit_message_text(
-                    "📭 هیچ کاربری پرسشنامه تکمیل نکرده است!",
+                    "📭 هیچ کاربری پرسشنامه شروع نکرده است!",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
                     ])
@@ -1256,11 +1336,11 @@ class AdminPanel:
                 return
             
             # Sort by completion date (newest first)
-            completed_users.sort(key=lambda x: x['completion_date'], reverse=True)
+            completed_users.sort(key=lambda x: x.get('completion_date', ''), reverse=True)
             
             # Create buttons for each user (max 20 users to avoid message length issues)
             keyboard = []
-            text = "👥 کاربران تکمیل‌کننده پرسشنامه:\n\n"
+            text = "👥 کاربران با پرسشنامه:\n\n"
             
             for i, user in enumerate(completed_users[:20]):
                 user_id = user['user_id']
@@ -1268,16 +1348,28 @@ class AdminPanel:
                 phone = user['phone']
                 photos = user['photos_count']
                 docs = user['documents_count']
+                status = "✅" if user['is_completed'] else "🔄"
                 
-                text += f"{i+1}. {name} ({phone})\n📷 {photos} عکس | 📎 {docs} سند\n\n"
+                text += f"{i+1}. {status} {name} ({phone})\n📷 {photos} عکس | 📎 {docs} سند\n\n"
                 
                 keyboard.append([InlineKeyboardButton(
-                    f"{i+1}. {name} ({phone}) - 📷{photos} 📎{docs}",
+                    f"{i+1}. {status} {name} ({phone}) - 📷{photos} 📎{docs}",
                     callback_data=f'export_user_{user_id}'
                 )])
             
             keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')])
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            logger.error(f"Error in show_completed_users_list: {e}")
+            await query.edit_message_text(
+                f"❌ خطا در بارگذاری لیست کاربران: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                ])
+            )
             
             if len(completed_users) > 20:
                 text += f"\n⚠️ فقط 20 کاربر اول نمایش داده شد. کل: {len(completed_users)} کاربر"
@@ -1285,9 +1377,16 @@ class AdminPanel:
             await query.edit_message_text(text, reply_markup=reply_markup)
             
         except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                update=query,
+                context=None,
+                error=e,
+                operation_context="show_completed_users_list",
+                admin_id=query.from_user.id
+            )
             await query.edit_message_text(f"❌ خطا در بارگذاری لیست کاربران: {str(e)}")
 
-    async def export_user_personal_data(self, query, user_id: str) -> None:
+    async def export_user_personal_data(self, query, user_id: str, context) -> None:
         """Export all data for a specific user including questionnaire photos and documents"""
         try:
             # Load all data
@@ -1303,6 +1402,9 @@ class AdminPanel:
             # Get user data
             user_data = bot_data.get('users', {}).get(user_id, {})
             user_questionnaire = questionnaire_data.get(user_id, {})
+            
+            # Log detailed questionnaire analysis for debugging
+            await admin_error_handler.log_questionnaire_data_analysis(user_id, user_questionnaire)
             
             if not user_data:
                 await query.edit_message_text(
@@ -1329,19 +1431,128 @@ class AdminPanel:
             # Count photos and get their info
             photo_count = 0
             photo_files = []
+            document_count = 0
+            document_files = []
+            
             if user_questionnaire.get('answers'):
-                for step, answer in user_questionnaire.get('answers', {}).items():
+                answers = user_questionnaire.get('answers', {})
+                
+                # Add comprehensive debugging for document export
+                admin_id = query.from_user.id
+                await admin_error_handler.log_admin_action(
+                    admin_id, 
+                    "export_user_start", 
+                    {"export_user_id": user_id, "user_name": user_name}
+                )
+                
+                print(f"🔍 DEBUG: Processing user {user_id} ({user_name})")
+                print(f"📝 Answer keys: {list(answers.keys())}")
+                
+                admin_error_handler.admin_logger.info(f"EXPORT DEBUG - Processing user {user_id} | Answer keys: {list(answers.keys())}")
+                self.admin_logger = admin_error_handler.admin_logger
+                
+                # Handle photos stored in the 'photos' key
+                photos_data = answers.get('photos', {})
+                print(f"📷 Photos data: {type(photos_data)} with keys: {list(photos_data.keys()) if isinstance(photos_data, dict) else 'Not a dict'}")
+                
+                if isinstance(photos_data, dict):
+                    for step, step_photos in photos_data.items():
+                        if isinstance(step_photos, list):
+                            for photo in step_photos:
+                                photo_count += 1
+                                if isinstance(photo, dict):
+                                    file_id = photo.get('file_id')
+                                    local_path = photo.get('local_path')
+                                    if local_path and os.path.exists(local_path):
+                                        photo_files.append((step, local_path, file_id))
+                                    elif file_id:
+                                        photo_files.append((step, None, file_id))  # No local file, but has file_id
+                                elif isinstance(photo, str):
+                                    # Legacy format where photo is just a file_id
+                                    photo_files.append((step, None, photo))
+                
+                # Handle other step-based photos (for backward compatibility)
+                for step, answer in answers.items():
+                    if step == 'photos' or step == 'documents':
+                        continue  # Already processed above
                     if isinstance(answer, dict) and answer.get('type') == 'photo':
                         photo_count += 1
                         local_path = answer.get('local_path')
                         file_ids = answer.get('file_ids', [])
                         
                         if local_path and os.path.exists(local_path):
-                            photo_files.append((step, local_path))
+                            photo_files.append((step, local_path, file_ids[0] if file_ids else None))
                         elif file_ids:
-                            # For migrated photos without local storage, we'll note them
-                            # In a real bot environment, these could be downloaded using the file_ids
-                            photo_files.append((step, f"[File IDs: {len(file_ids)} photos - not locally stored]"))
+                            for i, file_id in enumerate(file_ids):
+                                photo_files.append((step, None, file_id))
+                
+                # Check for documents in questionnaire answers
+                documents_data = answers.get('documents', {})
+                print(f"📎 Documents data: {type(documents_data)} content: {documents_data}")
+                
+                await admin_error_handler.log_file_operation(
+                    operation="check_documents",
+                    file_type="document",
+                    success=True,
+                    admin_id=admin_id,
+                    error_message=f"Documents data type: {type(documents_data)}, content: {documents_data}"
+                )
+                
+                if isinstance(documents_data, dict):
+                    for step, doc_info in documents_data.items():
+                        if isinstance(doc_info, dict):
+                            document_count += 1
+                            document_files.append((step, doc_info))
+                            print(f"📎 Found document in step {step}: {doc_info}")
+                            
+                            await admin_error_handler.log_file_operation(
+                                operation="found_document",
+                                file_type="document",
+                                file_id=doc_info.get('file_id'),
+                                success=True,
+                                admin_id=admin_id,
+                                error_message=f"Step {step}, doc_info: {doc_info}"
+                            )
+                        else:
+                            print(f"⚠️ Document in step {step} is not a dict: {type(doc_info)} - {doc_info}")
+                            
+                            await admin_error_handler.log_file_operation(
+                                operation="invalid_document_format",
+                                file_type="document",
+                                success=False,
+                                admin_id=admin_id,
+                                error_message=f"Step {step}, invalid format: {type(doc_info)} - {doc_info}"
+                            )
+                
+                # Also check for any document-like fields in other answers
+                for step, answer in answers.items():
+                    if isinstance(answer, dict) and answer.get('type') == 'document':
+                        print(f"📎 Found document-type answer in step {step}: {answer}")
+                        document_count += 1
+                        document_files.append((step, answer))
+                
+                print(f"📊 Final counts - Photos: {photo_count}, Documents: {document_count}")
+                
+                # Initialize counters for export process
+                documents_added = 0
+                documents_failed = 0
+                photos_added = 0
+                photos_downloaded = 0
+                photos_noted = 0
+                
+                # Log final export summary
+                await admin_error_handler.log_document_export_debug(
+                    admin_id,
+                    user_id,
+                    user_questionnaire,
+                    document_count,
+                    {
+                        "documents_added": documents_added,
+                        "documents_failed": documents_failed,
+                        "photos_added": photos_added,
+                        "photos_downloaded": photos_downloaded
+                    }
+                )
             
             # Create comprehensive user report
             report = f"""📋 گزارش کامل کاربر: {user_name}
@@ -1358,7 +1569,9 @@ class AdminPanel:
 • تاریخ تکمیل: {user_questionnaire.get('completion_timestamp', user_questionnaire.get('completed_at', 'نامشخص'))}
 
 📷 تصاویر پرسشنامه: {photo_count} عکس
-📎 اسناد ارسالی: {len(user_data.get('documents', []))}
+📎 اسناد ارسالی: {document_count} سند
+
+💡 نکته: {f'اسناد در قدم‌های 10 و 11 (تمرین هوازی/وزنه) قابل آپلود هستند' if document_count == 0 else 'اسناد آپلود شده موجود است'}
 
 """
             
@@ -1366,7 +1579,9 @@ class AdminPanel:
             if user_questionnaire.get('answers'):
                 report += "\n📋 پاسخ‌های پرسشنامه:\n"
                 for step, answer in user_questionnaire.get('answers', {}).items():
-                    if isinstance(answer, dict):
+                    if step in ['documents', 'photos']:
+                        continue  # Skip these, we'll handle them separately
+                    elif isinstance(answer, dict):
                         if answer.get('type') == 'photo':
                             local_path = answer.get('local_path', 'مسیر نامشخص')
                             report += f"سوال {step}: [تصویر] {os.path.basename(local_path) if local_path != 'مسیر نامشخص' else 'فایل موجود نیست'}\n"
@@ -1375,14 +1590,14 @@ class AdminPanel:
                     else:
                         report += f"سوال {step}: {answer}\n"
             
-            # Add documents info
-            documents = user_data.get('documents', [])
-            if documents:
-                report += "\n📎 اسناد ارسالی:\n"
-                for i, doc in enumerate(documents, 1):
-                    report += f"{i}. {doc.get('file_name', 'نامشخص')} ({doc.get('file_type', 'نامشخص')})\n"
-                    report += f"   📅 {doc.get('upload_date', 'نامشخص')}\n"
-                    report += f"   📁 {doc.get('file_path', 'مسیر نامشخص')}\n\n"
+            # Add documents info from questionnaire data
+            if document_files:
+                report += "\n📎 اسناد ارسالی در پرسشنامه:\n"
+                for i, (step, doc_info) in enumerate(document_files, 1):
+                    doc_name = doc_info.get('name', 'نامشخص')
+                    doc_file_id = doc_info.get('file_id', 'نامشخص')
+                    report += f"{i}. سوال {step}: {doc_name}\n"
+                    report += f"   � File ID: {doc_file_id}\n"
             
             # Create temporary directory for zip file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1397,34 +1612,185 @@ class AdminPanel:
                 zipf.writestr(report_filename, report.encode('utf-8'))
                 
                 # Add photos if they exist
-                photos_added = 0
-                photos_noted = 0
-                for step, photo_path in photo_files:
+                for step, photo_path, file_id in photo_files:
                     try:
-                        if os.path.exists(photo_path):
-                            # Create a meaningful filename
+                        if photo_path and os.path.exists(photo_path):
+                            # Local file exists
                             photo_extension = os.path.splitext(photo_path)[1]
                             photo_name = f"تصویر_قدم_{step}{photo_extension}"
                             zipf.write(photo_path, f"photos/{photo_name}")
                             photos_added += 1
-                        elif "[File IDs:" in photo_path:
-                            # Note migrated photos that aren't locally stored
-                            note_content = f"Step {step}: {photo_path}\n"
-                            zipf.writestr(f"migrated_photos_step_{step}.txt", note_content.encode('utf-8'))
+                        elif file_id:
+                            # Try to download from Telegram using file_id
+                            try:
+                                file = await context.bot.get_file(file_id)
+                                
+                                # Determine file extension from file path or default to .jpg
+                                file_extension = '.jpg'
+                                if hasattr(file, 'file_path') and file.file_path:
+                                    file_extension = os.path.splitext(file.file_path)[1] or '.jpg'
+                                
+                                # Create temp file for photo
+                                temp_photo_path = os.path.join(tempfile.gettempdir(), f"temp_photo_{step}_{file_id[:10]}{file_extension}")
+                                
+                                # Download the file
+                                await file.download_to_drive(temp_photo_path)
+                                
+                                # Add to zip with meaningful name
+                                photo_name = f"تصویر_قدم_{step}_{file_id[:10]}{file_extension}"
+                                zipf.write(temp_photo_path, f"photos/{photo_name}")
+                                photos_downloaded += 1
+                                
+                                # Clean up temp file
+                                try:
+                                    os.unlink(temp_photo_path)
+                                except:
+                                    pass
+                                    
+                            except Exception as download_error:
+                                print(f"Error downloading photo for step {step}: {download_error}")
+                                # Add a note about the failed download
+                                note_content = f"Step {step}: Photo (File ID: {file_id})\nDownload failed: {str(download_error)}\n"
+                                zipf.writestr(f"failed_photo_step_{step}_{file_id[:10]}.txt", note_content.encode('utf-8'))
+                                photos_noted += 1
+                        else:
+                            # No file_id and no local path
+                            note_content = f"Step {step}: Photo data incomplete (no file_id or local_path)\n"
+                            zipf.writestr(f"missing_photo_step_{step}.txt", note_content.encode('utf-8'))
                             photos_noted += 1
                     except Exception as e:
-                        print(f"Error adding photo {photo_path}: {e}")
+                        print(f"Error processing photo for step {step}: {e}")
+                        photos_noted += 1
+                
+                # Add documents by downloading them from Telegram
+                await admin_error_handler.log_admin_action(
+                    admin_id,
+                    "start_document_download",
+                    {"total_documents": len(document_files)}
+                )
+                
+                for step, doc_info in document_files:
+                    try:
+                        doc_file_id = doc_info.get('file_id')
+                        doc_name = doc_info.get('name', f'document_step_{step}')
+                        
+                        await admin_error_handler.log_file_operation(
+                            operation="attempt_document_download",
+                            file_type="document",
+                            file_id=doc_file_id,
+                            admin_id=admin_id,
+                            error_message=f"Step {step}, name: {doc_name}"
+                        )
+                        
+                        if doc_file_id:
+                            # Try to download the document from Telegram
+                            try:
+                                # Get file from Telegram
+                                file = await context.bot.get_file(doc_file_id)
+                                
+                                await admin_error_handler.log_file_operation(
+                                    operation="telegram_get_file_success",
+                                    file_type="document",
+                                    file_id=doc_file_id,
+                                    success=True,
+                                    admin_id=admin_id
+                                )
+                                
+                                # Create temp file for document
+                                doc_extension = os.path.splitext(doc_name)[1] or '.pdf'
+                                temp_doc_path = os.path.join(tempfile.gettempdir(), f"temp_doc_{step}_{doc_name}")
+                                
+                                # Download the file
+                                await file.download_to_drive(temp_doc_path)
+                                
+                                await admin_error_handler.log_file_operation(
+                                    operation="document_download_success",
+                                    file_type="document",
+                                    file_id=doc_file_id,
+                                    local_path=temp_doc_path,
+                                    success=True,
+                                    admin_id=admin_id
+                                )
+                                
+                                # Add to zip with meaningful name
+                                zip_doc_name = f"سند_قدم_{step}_{doc_name}"
+                                zipf.write(temp_doc_path, f"documents/{zip_doc_name}")
+                                documents_added += 1
+                                
+                                await admin_error_handler.log_file_operation(
+                                    operation="zip_add_document",
+                                    file_type="document",
+                                    local_path=temp_doc_path,
+                                    success=True,
+                                    admin_id=admin_id,
+                                    error_message=f"Added as {zip_doc_name}"
+                                )
+                                
+                                # Clean up temp file
+                                try:
+                                    os.unlink(temp_doc_path)
+                                except:
+                                    pass
+                                    
+                            except Exception as download_error:
+                                print(f"Error downloading document for step {step}: {download_error}")
+                                
+                                await admin_error_handler.log_file_operation(
+                                    operation="document_download_failed",
+                                    file_type="document",
+                                    file_id=doc_file_id,
+                                    success=False,
+                                    admin_id=admin_id,
+                                    error_message=str(download_error)
+                                )
+                                
+                                # Add a note about the failed download
+                                note_content = f"Step {step}: Document '{doc_name}' (File ID: {doc_file_id})\nDownload failed: {str(download_error)}\n"
+                                zipf.writestr(f"failed_document_step_{step}.txt", note_content.encode('utf-8'))
+                                documents_failed += 1
+                        else:
+                            await admin_error_handler.log_file_operation(
+                                operation="document_no_file_id",
+                                file_type="document",
+                                success=False,
+                                admin_id=admin_id,
+                                error_message=f"Step {step}: No file_id in doc_info: {doc_info}"
+                            )
+                            documents_failed += 1
+                    except Exception as e:
+                        print(f"Error processing document for step {step}: {e}")
+                        
+                        await admin_error_handler.log_file_operation(
+                            operation="document_processing_error",
+                            file_type="document",
+                            success=False,
+                            admin_id=admin_id,
+                            error_message=f"Step {step}: {str(e)}"
+                        )
+                        documents_failed += 1
                 
                 # Add note about photos
-                if photos_added > 0 or photos_noted > 0:
+                total_photos_processed = photos_added + photos_downloaded
+                if total_photos_processed > 0 or photos_noted > 0:
                     photo_note = f"📷 تصاویر در این بسته:\n"
                     if photos_added > 0:
                         photo_note += f"• {photos_added} تصویر محلی در پوشه photos\n"
+                    if photos_downloaded > 0:
+                        photo_note += f"• {photos_downloaded} تصویر دانلود شده از تلگرام در پوشه photos\n"
                     if photos_noted > 0:
-                        photo_note += f"• {photos_noted} تصویر قدیمی (فقط شناسه فایل - نیاز به دانلود مجدد)\n"
-                    if photos_added < photo_count:
-                        photo_note += f"⚠️ {photo_count - photos_added - photos_noted} تصویر به دلیل عدم دسترسی، اضافه نشد.\n"
+                        photo_note += f"• {photos_noted} تصویر قابل دسترسی نبود (یادداشت خطا موجود)\n"
+                    if total_photos_processed < photo_count:
+                        photo_note += f"⚠️ {photo_count - total_photos_processed - photos_noted} تصویر به دلیل عدم دسترسی، اضافه نشد.\n"
                     zipf.writestr("راهنمای_تصاویر.txt", photo_note.encode('utf-8'))
+                
+                # Add note about documents
+                if documents_added > 0 or documents_failed > 0:
+                    doc_note = f"📎 اسناد در این بسته:\n"
+                    if documents_added > 0:
+                        doc_note += f"• {documents_added} سند با موفقیت دانلود شده در پوشه documents\n"
+                    if documents_failed > 0:
+                        doc_note += f"• {documents_failed} سند دانلود نشد (یادداشت خطا موجود)\n"
+                    zipf.writestr("راهنمای_اسناد.txt", doc_note.encode('utf-8'))
             
             # Send the zip file
             with open(temp_zip_path, 'rb') as zip_file:
@@ -1432,8 +1798,9 @@ class AdminPanel:
                     document=zip_file,
                     filename=zip_filename,
                     caption=f"📤 گزارش کامل کاربر {user_name}\n\n"
-                           f"📋 شامل: گزارش متنی + {photos_added} تصویر محلی"
-                           f"{f' + {photos_noted} تصویر قدیمی' if photos_noted > 0 else ''}\n"
+                           f"📋 شامل: گزارش متنی + {total_photos_processed} تصویر + {documents_added} سند"
+                           f"{f' + {photos_noted} تصویر ناموفق' if photos_noted > 0 else ''}"
+                           f"{f' + {documents_failed} سند ناموفق' if documents_failed > 0 else ''}\n"
                            f"📅 تاریخ تولید: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
                 )
             
@@ -1452,12 +1819,21 @@ class AdminPanel:
             await query.edit_message_text(
                 f"✅ گزارش کامل {user_name} ارسال شد!\n\n"
                 f"📋 شامل: اطلاعات شخصی، پاسخ‌های پرسشنامه\n"
-                f"📷 تصاویر: {photos_added} فایل محلی"
-                f"{f', {photos_noted} فایل قدیمی' if photos_noted > 0 else ''}",
+                f"📷 تصاویر: {photos_added} فایل محلی + {photos_downloaded} دانلود شده"
+                f"{f', {photos_noted} فایل ناموفق' if photos_noted > 0 else ''}\n"
+                f"📎 اسناد: {documents_added} فایل دانلود شده"
+                f"{f', {documents_failed} فایل ناموفق' if documents_failed > 0 else ''}",
                 reply_markup=reply_markup
             )
             
         except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                update=query,
+                context=context,
+                error=e,
+                operation_context="export_user_personal_data",
+                admin_id=query.from_user.id
+            )
             await query.edit_message_text(f"❌ خطا در تولید گزارش: {str(e)}")
             print(f"Export error: {e}")  # For debugging
 
@@ -1838,92 +2214,341 @@ class AdminPanel:
         await query.edit_message_text(text, reply_markup=reply_markup)
 
     # =====================================
-    # PLAN MANAGEMENT SYSTEM
+    # PLAN MANAGEMENT SYSTEM - NEW PERSON-CENTRIC APPROACH
     # =====================================
     
     async def show_plan_management(self, query) -> None:
-        """Show the plan management main menu"""
+        """Show users who have bought courses for personalized plan management"""
         await query.answer()
         
-        course_types = {
-            'online_weights': '🏋️ وزنه آنلاین',
-            'online_cardio': '🏃 هوازی آنلاین',
-            'online_combo': '💪 ترکیبی آنلاین',
-            'in_person_cardio': '🏃‍♂️ هوازی حضوری',
-            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
-        }
-        
-        keyboard = []
-        for course_code, course_name in course_types.items():
-            keyboard.append([InlineKeyboardButton(f"📋 {course_name}", callback_data=f'plan_course_{course_code}')])
-        
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت به پنل اصلی", callback_data='admin_back_main')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = """📋 مدیریت برنامه‌های تمرینی
-
-یکی از دوره‌ها را انتخاب کنید تا برنامه‌های آن را مدیریت کنید:
-
-💡 برای هر دوره می‌توانید:
-• برنامه‌های موجود را مشاهده کنید
-• برنامه جدید آپلود کنید
-• برنامه‌های قدیمی را ویرایش کنید
-• برنامه‌ها را برای کاربران ارسال کنید"""
-        
-        await query.edit_message_text(text, reply_markup=reply_markup)
-
-    async def show_course_plan_management(self, query, course_type: str) -> None:
-        """Show plan management for a specific course with error handling"""
         try:
-            await query.answer()
+            # Load both user and payment data
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
             
-            await admin_error_handler.log_admin_action(
-                query.from_user.id, "view_course_plans", {"course_type": course_type}
-            )
+            users = bot_data.get('users', {})
+            payments = bot_data.get('payments', {})
+            
+            # Find users who have approved payments (actual purchases)
+            paid_users = []
+            user_course_map = {}  # user_id -> set of purchased courses
+            
+            # First, build map of users with approved payments
+            for payment_id, payment_data in payments.items():
+                if payment_data.get('status') == 'approved':
+                    user_id = str(payment_data.get('user_id'))
+                    course_type = payment_data.get('course_type')
+                    
+                    if user_id not in user_course_map:
+                        user_course_map[user_id] = set()
+                    user_course_map[user_id].add(course_type)
+            
+            # Create user list with their purchased courses
+            for user_id, purchased_courses in user_course_map.items():
+                user_data = users.get(user_id, {})
+                if user_data:  # Only include users that exist in user data
+                    # Get primary course (most recent or first one)
+                    primary_course = list(purchased_courses)[0] if purchased_courses else 'نامشخص'
+                    
+                    paid_users.append({
+                        'user_id': user_id,
+                        'name': user_data.get('name', 'نامشخص'),
+                        'phone': user_data.get('phone', 'نامشخص'),
+                        'course': primary_course,
+                        'purchased_courses': purchased_courses,
+                        'course_count': len(purchased_courses)
+                    })
+            
+            if not paid_users:
+                keyboard = [[InlineKeyboardButton("🔙 بازگشت به پنل اصلی", callback_data='admin_back_main')]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                text = """📋 مدیریت برنامه‌های شخصی
+
+❌ هنوز هیچ کاربری دوره‌ای خریداری نکرده است.
+
+💡 برای استفاده از این بخش، ابتدا باید:
+• کاربرانی ثبت‌نام کنند
+• دوره‌ای را انتخاب کنند  
+• پرداخت آن‌ها تأیید شود
+
+🔍 Debug Info: Checked {len(payments)} payments, found {len([p for p in payments.values() if p.get('status') == 'approved'])} approved"""
+                
+                await query.edit_message_text(text, reply_markup=reply_markup)
+                return
+            
+            # Sort users by name
+            paid_users.sort(key=lambda x: x['name'])
+            
+            keyboard = []
+            text = f"👥 کاربران خریدار دوره ({len(paid_users)} نفر)\n\n"
+            text += "برای مدیریت برنامه شخصی هر کاربر، روی نام کلیک کنید:\n\n"
             
             course_names = {
                 'online_weights': '🏋️ وزنه آنلاین',
-                'online_cardio': '🏃 هوازی آنلاین', 
+                'online_cardio': '🏃 هوازی آنلاین',
                 'online_combo': '💪 ترکیبی آنلاین',
                 'in_person_cardio': '🏃‍♂️ هوازی حضوری',
-                'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری',
+                'nutrition_plan': '🍎 برنامه غذایی'
             }
             
-            course_name = course_names.get(course_type, course_type)
+            for i, user in enumerate(paid_users, 1):
+                # Show primary course and course count if multiple
+                course_display = course_names.get(user['course'], user['course'])
+                if user['course_count'] > 1:
+                    course_display += f" (+{user['course_count'] - 1} دیگر)"
+                    
+                user_display = f"{i}. {user['name']} ({user['phone']}) - {course_display}"
+                text += f"{user_display}\n"
+                
+                keyboard.append([InlineKeyboardButton(
+                    user_display[:60] + "..." if len(user_display) > 60 else user_display,
+                    callback_data=f'user_plans_{user["user_id"]}'
+                )])
             
-            # Load existing plans for this course
-            plans = await self.load_course_plans(course_type)
-            
-            keyboard = [
-                [InlineKeyboardButton("📤 آپلود برنامه جدید", callback_data=f'upload_plan_{course_type}')],
-                [InlineKeyboardButton("👥 ارسال برنامه به کاربران", callback_data=f'send_plan_{course_type}')]
-            ]
-            
-            if plans:
-                keyboard.append([InlineKeyboardButton("📋 مشاهده برنامه‌های موجود", callback_data=f'view_plans_{course_type}')])
-            
-            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_plans')])
-            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت به پنل اصلی", callback_data='admin_back_main')])
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            plan_count = len(plans)
-            text = f"""📋 مدیریت برنامه‌های {course_name}
-
-📊 تعداد برنامه‌های موجود: {plan_count}
-
-💡 امکانات:
-• آپلود برنامه جدید (PDF, تصویر، متن)
-• ارسال برنامه‌ها به کاربران خاص
-• مشاهده و ویرایش برنامه‌های موجود
-• حذف برنامه‌های قدیمی"""
             
             await query.edit_message_text(text, reply_markup=reply_markup)
             
         except Exception as e:
             await admin_error_handler.handle_admin_error(
-                query, None, e, f"show_course_plan_management:{course_type}", query.from_user.id
+                query, None, e, "show_plan_management", query.from_user.id
             )
+
+    async def show_user_course_plans(self, query, user_id: str) -> None:
+        """Show courses purchased by a specific user for plan management"""
+        try:
+            await query.answer()
+            
+            # Load user and payment data
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            
+            # Load existing plans
+            user_plans = await self.load_user_plans(user_id)
+            
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            payments = bot_data.get('payments', {})
+            
+            if not user_data:
+                await query.edit_message_text(
+                    "❌ کاربر یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_plans')]
+                    ])
+                )
+                return
+            
+            user_name = user_data.get('name', 'نامشخص')
+            user_phone = user_data.get('phone', 'نامشخص')
+            
+            # Get all purchased courses for this user from payments table
+            purchased_courses = []
+            for payment_id, payment_data in payments.items():
+                if (payment_data.get('user_id') == int(user_id) and 
+                    payment_data.get('status') == 'approved'):
+                    course_type = payment_data.get('course_type')
+                    if course_type and course_type not in purchased_courses:
+                        purchased_courses.append(course_type)
+            
+            if not purchased_courses:
+                await query.edit_message_text(
+                    f"❌ کاربر {user_name} هنوز هیچ دوره‌ای خریداری نکرده است!\n\n"
+                    f"🔍 Debug: Checked {len(payments)} payments for user_id {user_id}",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_plans')]
+                    ])
+                )
+                return
+            
+            course_names = {
+                'online_weights': '🏋️ وزنه آنلاین',
+                'online_cardio': '🏃 هوازی آنلاین',
+                'online_combo': '💪 ترکیبی آنلاین',
+                'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری',
+                'nutrition_plan': '🍎 برنامه غذایی'
+            }
+            
+            keyboard = []
+            text = f"� مدیریت برنامه‌های {user_name}\n"
+            text += f"📱 تلفن: {user_phone}\n\n"
+            text += "دوره‌های خریداری شده:\n\n"
+            
+            for course_code in purchased_courses:
+                course_name = course_names.get(course_code, course_code)
+                course_plans = user_plans.get(course_code, [])
+                plan_count = len(course_plans)
+                
+                text += f"📚 {course_name}\n"
+                text += f"   📋 {plan_count} برنامه موجود\n"
+                if course_plans:
+                    latest_plan = max(course_plans, key=lambda x: x.get('upload_date', ''))
+                    text += f"   🕐 آخرین برنامه: {latest_plan.get('upload_date', 'نامشخص')[:10]}\n"
+                text += "\n"
+                
+                keyboard.append([InlineKeyboardButton(
+                    f"📚 {course_name} ({plan_count} برنامه)",
+                    callback_data=f'manage_user_course_{user_id}_{course_code}'
+                )])
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت به لیست کاربران", callback_data='admin_plans')])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"show_user_course_plans:{user_id}", query.from_user.id
+            )
+
+    async def show_user_course_plan_management(self, query, user_id: str, course_code: str) -> None:
+        """Show plan management for a specific user's specific course"""
+        try:
+            await query.answer()
+            
+            # Load user data and plans
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_name = user_data.get('name', 'نامشخص')
+            
+            user_plans = await self.load_user_plans(user_id)
+            course_plans = user_plans.get(course_code, [])
+            
+            course_names = {
+                'online_weights': '🏋️ وزنه آنلاین',
+                'online_cardio': '🏃 هوازی آنلاین',
+                'online_combo': '💪 ترکیبی آنلاین',
+                'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+            }
+            course_name = course_names.get(course_code, course_code)
+            
+            keyboard = [
+                [InlineKeyboardButton("📤 آپلود برنامه جدید", callback_data=f'upload_user_plan_{user_id}_{course_code}')]
+            ]
+            
+            text = f"📋 مدیریت برنامه {course_name}\n"
+            text += f"👤 کاربر: {user_name}\n\n"
+            
+            if course_plans:
+                text += f"📚 برنامه‌های موجود ({len(course_plans)} عدد):\n\n"
+                
+                # Sort plans by upload date (newest first)
+                sorted_plans = sorted(course_plans, key=lambda x: x.get('upload_date', ''), reverse=True)
+                
+                for i, plan in enumerate(sorted_plans, 1):
+                    upload_date = plan.get('upload_date', 'نامشخص')[:16].replace('T', ' ')
+                    plan_type = plan.get('type', 'نامشخص')
+                    file_name = plan.get('file_name', 'نامشخص')
+                    
+                    text += f"{i}. 📄 {file_name}\n"
+                    text += f"   📅 {upload_date}\n"
+                    text += f"   📋 نوع: {plan_type}\n"
+                    
+                    # Add buttons for each plan
+                    plan_id = plan.get('id', f'plan_{i}')
+                    keyboard.append([
+                        InlineKeyboardButton(f"�️ مشاهده برنامه {i}", callback_data=f'view_user_plan_{user_id}_{course_code}_{plan_id}'),
+                        InlineKeyboardButton(f"� ارسال برنامه {i}", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}')
+                    ])
+                    keyboard.append([
+                        InlineKeyboardButton(f"�️ حذف برنامه {i}", callback_data=f'delete_user_plan_{user_id}_{course_code}_{plan_id}')
+                    ])
+                    text += "\n"
+                
+                keyboard.append([InlineKeyboardButton("� ارسال آخرین برنامه", callback_data=f'send_latest_plan_{user_id}_{course_code}')])
+            else:
+                text += "📭 هنوز هیچ برنامه‌ای برای این کاربر و دوره آپلود نشده است.\n\n"
+                text += "� برای شروع، روی 'آپلود برنامه جدید' کلیک کنید."
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f'user_plans_{user_id}')])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"show_user_course_plan_management:{user_id}:{course_code}", query.from_user.id
+            )
+
+    async def load_user_plans(self, user_id: str) -> dict:
+        """Load all plans for a specific user organized by course"""
+        try:
+            plans_file = f'user_plans/{user_id}_plans.json'
+            if os.path.exists(plans_file):
+                with open(plans_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.error(f"Error loading user plans for {user_id}: {e}")
+            return {}
+
+    async def save_user_plans(self, user_id: str, plans_data: dict) -> bool:
+        """Save plans for a specific user"""
+        try:
+            # Create user_plans directory if it doesn't exist
+            os.makedirs('user_plans', exist_ok=True)
+            
+            plans_file = f'user_plans/{user_id}_plans.json'
+            with open(plans_file, 'w', encoding='utf-8') as f:
+                json.dump(plans_data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving user plans for {user_id}: {e}")
+            return False
+
+    async def add_user_plan(self, user_id: str, course_code: str, plan_data: dict) -> bool:
+        """Add a new plan for a specific user and course"""
+        try:
+            user_plans = await self.load_user_plans(user_id)
+            
+            if course_code not in user_plans:
+                user_plans[course_code] = []
+            
+            # Add timestamp and unique ID
+            plan_data['upload_date'] = datetime.now().isoformat()
+            plan_data['id'] = f"plan_{int(datetime.now().timestamp())}"
+            
+            user_plans[course_code].append(plan_data)
+            
+            return await self.save_user_plans(user_id, user_plans)
+        except Exception as e:
+            logger.error(f"Error adding user plan for {user_id}, course {course_code}: {e}")
+            return False
+
+    async def delete_user_plan(self, user_id: str, course_code: str, plan_id: str) -> bool:
+        """Delete a specific plan for a user and course"""
+        try:
+            user_plans = await self.load_user_plans(user_id)
+            
+            if course_code in user_plans:
+                user_plans[course_code] = [
+                    plan for plan in user_plans[course_code] 
+                    if plan.get('id') != plan_id
+                ]
+                return await self.save_user_plans(user_id, user_plans)
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting user plan for {user_id}, course {course_code}, plan {plan_id}: {e}")
+            return False
+
+    async def get_user_plan(self, user_id: str, course_code: str, plan_id: str) -> dict:
+        """Get a specific plan for a user and course"""
+        try:
+            user_plans = await self.load_user_plans(user_id)
+            
+            if course_code in user_plans:
+                for plan in user_plans[course_code]:
+                    if plan.get('id') == plan_id:
+                        return plan
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting user plan for {user_id}, course {course_code}, plan {plan_id}: {e}")
+            return {}
 
     async def load_course_plans(self, course_type: str) -> list:
         """Load plans for a specific course type"""
@@ -1941,10 +2566,59 @@ class AdminPanel:
         """Save plans for a specific course type"""
         try:
             plans_file = f'course_plans_{course_type}.json'
+            
+            # Log save attempt with detailed info
+            from admin_error_handler import admin_error_handler
+            await admin_error_handler.log_plan_management_debug(
+                admin_id=0,  # System operation
+                operation='save_plans',
+                course_type=course_type,
+                plans_before=None,
+                plans_after=len(plans),
+                success=None,
+                details={'plans_file': plans_file, 'total_plans': len(plans)}
+            )
+            
+            # Create backup of existing file first
+            import os
+            if os.path.exists(plans_file):
+                backup_file = f'{plans_file}.backup'
+                import shutil
+                shutil.copy2(plans_file, backup_file)
+            
+            # Save new data
             with open(plans_file, 'w', encoding='utf-8') as f:
                 json.dump(plans, f, ensure_ascii=False, indent=2)
-            return True
+            
+            # Verify save by reading back
+            with open(plans_file, 'r', encoding='utf-8') as f:
+                saved_plans = json.load(f)
+                
+            save_successful = len(saved_plans) == len(plans)
+            
+            # Log save result
+            await admin_error_handler.log_plan_management_debug(
+                admin_id=0,
+                operation='save_plans_verify',
+                course_type=course_type,
+                plans_before=len(plans),
+                plans_after=len(saved_plans),
+                success=save_successful,
+                details={'verification': 'read_back_check'}
+            )
+            
+            return save_successful
+            
         except Exception as e:
+            # Log save failure
+            from admin_error_handler import admin_error_handler
+            await admin_error_handler.log_plan_management_debug(
+                admin_id=0,
+                operation='save_plans_failed',
+                course_type=course_type,
+                success=False,
+                details={'error': str(e), 'error_type': type(e).__name__}
+            )
             print(f"Error saving plans for {course_type}: {e}")
             return False
 
@@ -2026,6 +2700,415 @@ class AdminPanel:
                 query, context, e, f"plan_callback_routing:{query.data}", query.from_user.id
             )
 
+    async def handle_new_plan_callback_routing(self, query, context=None) -> None:
+        """Route new person-centric plan management callbacks"""
+        try:
+            callback_data = query.data
+            logger.info(f"🔄 NEW PLAN ROUTING: {callback_data}")
+            
+            await admin_error_handler.log_admin_action(
+                query.from_user.id, "new_plan_callback", {"callback_data": callback_data}
+            )
+            
+            if callback_data.startswith('upload_user_plan_'):
+                # upload_user_plan_USER_ID_COURSE_CODE
+                parts = callback_data.replace('upload_user_plan_', '').split('_')
+                if len(parts) >= 3:
+                    user_id = parts[0]
+                    # Find course code - look for known patterns
+                    if len(parts) >= 4 and parts[1] == 'in' and parts[2] == 'person':
+                        course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"  # in_person_cardio or in_person_weights
+                    elif len(parts) >= 3 and parts[1] == 'online':
+                        course_code = f"{parts[1]}_{parts[2]}"  # online_cardio, online_weights, online_combo
+                    else:
+                        # Fallback - assume single word course code
+                        course_code = parts[1]
+                    await self.handle_user_plan_upload(query, user_id, course_code, context)
+                else:
+                    await query.answer("❌ خطا در تجزیه دستور!")
+                
+            elif callback_data.startswith('send_user_plan_'):
+                # send_user_plan_USER_ID_COURSE_CODE_PLAN_ID
+                # Parse more carefully: send_user_plan_293893885_in_person_cardio_plan_123
+                parts = callback_data.replace('send_user_plan_', '').split('_')
+                if len(parts) >= 4:  # Need at least user_id, course_part1, course_part2, plan_id
+                    user_id = parts[0]
+                    # Find course code - look for known patterns
+                    if len(parts) >= 5 and parts[1] == 'in' and parts[2] == 'person':
+                        course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"  # in_person_cardio or in_person_weights
+                        plan_id = '_'.join(parts[4:])
+                    elif len(parts) >= 4 and parts[1] == 'online':
+                        course_code = f"{parts[1]}_{parts[2]}"  # online_cardio, online_weights, online_combo
+                        plan_id = '_'.join(parts[3:])
+                    else:
+                        # Fallback - assume single word course code
+                        course_code = parts[1]
+                        plan_id = '_'.join(parts[2:])
+                    await self.handle_send_user_plan(query, user_id, course_code, plan_id, context)
+                else:
+                    await query.answer("❌ خطا در تجزیه دستور!")
+                    
+            elif callback_data.startswith('view_user_plan_'):
+                # view_user_plan_USER_ID_COURSE_CODE_PLAN_ID
+                parts = callback_data.replace('view_user_plan_', '').split('_')
+                if len(parts) >= 4:
+                    user_id = parts[0]
+                    # Find course code - look for known patterns
+                    if len(parts) >= 5 and parts[1] == 'in' and parts[2] == 'person':
+                        course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
+                        plan_id = '_'.join(parts[4:])
+                    elif len(parts) >= 4 and parts[1] == 'online':
+                        course_code = f"{parts[1]}_{parts[2]}"
+                        plan_id = '_'.join(parts[3:])
+                    else:
+                        course_code = parts[1]
+                        plan_id = '_'.join(parts[2:])
+                    await self.handle_view_user_plan(query, user_id, course_code, plan_id)
+                else:
+                    await query.answer("❌ خطا در تجزیه دستور!")
+                    
+            elif callback_data.startswith('delete_user_plan_'):
+                # delete_user_plan_USER_ID_COURSE_CODE_PLAN_ID
+                parts = callback_data.replace('delete_user_plan_', '').split('_')
+                if len(parts) >= 4:
+                    user_id = parts[0]
+                    if len(parts) >= 5 and parts[1] == 'in' and parts[2] == 'person':
+                        course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
+                        plan_id = '_'.join(parts[4:])
+                    elif len(parts) >= 4 and parts[1] == 'online':
+                        course_code = f"{parts[1]}_{parts[2]}"
+                        plan_id = '_'.join(parts[3:])
+                    else:
+                        course_code = parts[1]
+                        plan_id = '_'.join(parts[2:])
+                    await self.handle_delete_user_plan(query, user_id, course_code, plan_id)
+                else:
+                    await query.answer("❌ خطا در تجزیه دستور!")
+                    
+            elif callback_data.startswith('send_latest_plan_'):
+                # send_latest_plan_USER_ID_COURSE_CODE
+                parts = callback_data.replace('send_latest_plan_', '').split('_')
+                if len(parts) >= 3:
+                    user_id = parts[0]
+                    if len(parts) >= 4 and parts[1] == 'in' and parts[2] == 'person':
+                        course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
+                    elif len(parts) >= 3 and parts[1] == 'online':
+                        course_code = f"{parts[1]}_{parts[2]}"
+                    else:
+                        course_code = parts[1]
+                    await self.handle_send_latest_user_plan(query, user_id, course_code, context)
+                else:
+                    await query.answer("❌ خطا در تجزیه دستور!")
+                
+            else:
+                await query.answer("❌ عملیات نامشخص!")
+                
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, context, e, f"new_plan_callback_routing:{query.data}", query.from_user.id
+            )
+
+    async def handle_user_plan_upload(self, query, user_id: str, course_code: str, context=None) -> None:
+        """Handle plan upload for a specific user and course"""
+        await query.answer()
+        
+        course_names = {
+            'online_weights': '🏋️ وزنه آنلاین',
+            'online_cardio': '🏃 هوازی آنلاین',
+            'online_combo': '💪 ترکیبی آنلاین',
+            'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+        }
+        course_name = course_names.get(course_code, course_code)
+        
+        # Load user data to get name
+        with open('bot_data.json', 'r', encoding='utf-8') as f:
+            bot_data = json.load(f)
+        user_data = bot_data.get('users', {}).get(user_id, {})
+        user_name = user_data.get('name', 'نامشخص')
+        
+        # Set upload state in context if available
+        if context:
+            admin_id = query.from_user.id
+            if admin_id not in context.user_data:
+                context.user_data[admin_id] = {}
+            context.user_data[admin_id]['uploading_user_plan'] = True
+            context.user_data[admin_id]['plan_user_id'] = user_id
+            context.user_data[admin_id]['plan_course_code'] = course_code
+            context.user_data[admin_id]['plan_upload_step'] = 'title'
+        
+        text = f"""📤 آپلود برنامه شخصی
+
+👤 کاربر: {user_name}
+📚 دوره: {course_name}
+
+📋 فرمت‌های قابل قبول:
+• فایل PDF
+• تصاویر (JPG, PNG)
+• متن (فایل متنی یا پیام)
+
+💡 نحوه آپلود:
+1️⃣ عنوان برنامه را بنویسید
+2️⃣ فایل یا تصویر برنامه را ارسال کنید
+3️⃣ توضیحات اضافی (اختیاری)
+
+⏳ لطفاً ابتدا عنوان برنامه را بنویسید:"""
+        
+        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data=f'manage_user_course_{user_id}_{course_code}')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def handle_send_user_plan(self, query, user_id: str, course_code: str, plan_id: str, context=None) -> None:
+        """Send a specific plan to a specific user"""
+        try:
+            await query.answer("📤 در حال ارسال برنامه...")
+            
+            # Get plan data
+            plan = await self.get_user_plan(user_id, course_code, plan_id)
+            if not plan:
+                await query.edit_message_text(
+                    "❌ برنامه یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+                return
+            
+            # Load user data
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_name = user_data.get('name', 'نامشخص')
+            
+            # Send plan to user
+            plan_file = plan.get('file_path')
+            plan_type = plan.get('type', 'نامشخص')
+            plan_title = plan.get('title', 'برنامه تمرینی')
+            
+            if plan_file and os.path.exists(plan_file):
+                # Send the file to the user
+                with open(plan_file, 'rb') as file:
+                    if plan_type == 'photo':
+                        await context.bot.send_photo(
+                            chat_id=int(user_id),
+                            photo=file,
+                            caption=f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                        )
+                    elif plan_type == 'document':
+                        await context.bot.send_document(
+                            chat_id=int(user_id),
+                            document=file,
+                            caption=f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                        )
+                    else:
+                        await context.bot.send_document(
+                            chat_id=int(user_id),
+                            document=file,
+                            caption=f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                        )
+                
+                await query.edit_message_text(
+                    f"✅ برنامه '{plan_title}' با موفقیت برای {user_name} ارسال شد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+            else:
+                await query.edit_message_text(
+                    "❌ فایل برنامه یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+                
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"handle_send_user_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
+            )
+
+    async def handle_view_user_plan(self, query, user_id: str, course_code: str, plan_id: str) -> None:
+        """View details of a specific user plan"""
+        try:
+            await query.answer()
+            
+            plan = await self.get_user_plan(user_id, course_code, plan_id)
+            if not plan:
+                await query.edit_message_text(
+                    "❌ برنامه یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+                return
+            
+            # Load user data
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_name = user_data.get('name', 'نامشخص')
+            
+            plan_title = plan.get('title', 'نامشخص')
+            plan_type = plan.get('type', 'نامشخص')
+            upload_date = plan.get('upload_date', 'نامشخص')[:16].replace('T', ' ')
+            file_name = plan.get('file_name', 'نامشخص')
+            description = plan.get('description', 'توضیحی ثبت نشده')
+            
+            text = f"""👁️ نمایش جزئیات برنامه
+
+👤 کاربر: {user_name}
+📋 عنوان: {plan_title}
+📅 تاریخ آپلود: {upload_date}
+📄 نام فایل: {file_name}
+📋 نوع: {plan_type}
+
+📝 توضیحات:
+{description}
+
+💡 برای ارسال این برنامه به کاربر از دکمه 'ارسال' استفاده کنید."""
+            
+            keyboard = [
+                [InlineKeyboardButton("📤 ارسال برنامه", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}')],
+                [InlineKeyboardButton("🗑️ حذف برنامه", callback_data=f'delete_user_plan_{user_id}_{course_code}_{plan_id}')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"handle_view_user_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
+            )
+
+    async def handle_delete_user_plan(self, query, user_id: str, course_code: str, plan_id: str) -> None:
+        """Delete a specific user plan with confirmation"""
+        try:
+            await query.answer()
+            
+            plan = await self.get_user_plan(user_id, course_code, plan_id)
+            if not plan:
+                await query.edit_message_text(
+                    "❌ برنامه یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+                return
+            
+            # Load user data
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_name = user_data.get('name', 'نامشخص')
+            
+            plan_title = plan.get('title', 'نامشخص')
+            
+            text = f"""🗑️ حذف برنامه
+
+👤 کاربر: {user_name}
+📋 برنامه: {plan_title}
+
+⚠️ آیا مطمئن هستید که می‌خواهید این برنامه را حذف کنید؟
+
+❌ این عملیات قابل بازگشت نیست!"""
+            
+            keyboard = [
+                [InlineKeyboardButton("✅ بله، حذف کن", callback_data=f'confirm_delete_{user_id}_{course_code}_{plan_id}')],
+                [InlineKeyboardButton("❌ انصراف", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"handle_delete_user_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
+            )
+
+    async def handle_send_latest_user_plan(self, query, user_id: str, course_code: str, context=None) -> None:
+        """Send the latest plan for a user and course"""
+        try:
+            await query.answer("📤 در حال ارسال آخرین برنامه...")
+            
+            user_plans = await self.load_user_plans(user_id)
+            course_plans = user_plans.get(course_code, [])
+            
+            if not course_plans:
+                await query.edit_message_text(
+                    "❌ هیچ برنامه‌ای برای این کاربر و دوره یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+                return
+            
+            # Get the latest plan (most recent upload)
+            latest_plan = max(course_plans, key=lambda x: x.get('upload_date', ''))
+            plan_id = latest_plan.get('id')
+            
+            # Redirect to send_user_plan
+            await self.handle_send_user_plan(query, user_id, course_code, plan_id, context)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"handle_send_latest_user_plan:{user_id}:{course_code}", query.from_user.id
+            )
+
+    async def handle_confirm_delete_user_plan(self, query, user_id: str, course_code: str, plan_id: str) -> None:
+        """Confirm and delete a specific user plan"""
+        try:
+            await query.answer()
+            
+            plan = await self.get_user_plan(user_id, course_code, plan_id)
+            if not plan:
+                await query.edit_message_text(
+                    "❌ برنامه یافت نشد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+                return
+            
+            # Delete the plan
+            success = await self.delete_user_plan(user_id, course_code, plan_id)
+            
+            # Load user data for name
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_name = user_data.get('name', 'نامشخص')
+            
+            plan_title = plan.get('title', 'نامشخص')
+            
+            if success:
+                # Try to delete the physical file as well
+                file_path = plan.get('file_path')
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.unlink(file_path)
+                    except Exception as e:
+                        logger.warning(f"Could not delete physical file {file_path}: {e}")
+                
+                await query.edit_message_text(
+                    f"✅ برنامه '{plan_title}' برای کاربر {user_name} با موفقیت حذف شد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ خطا در حذف برنامه '{plan_title}'!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                    ])
+                )
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"handle_confirm_delete_user_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
+            )
+
     async def handle_send_plan_to_users(self, query, course_type: str) -> None:
         """Handle sending plans to specific users"""
         await query.answer()
@@ -2098,14 +3181,55 @@ class AdminPanel:
             print(f"Error getting users with course {course_type}: {e}")
             return []
 
-    async def show_existing_plans(self, query, course_type: str) -> None:
-        """Show existing plans for a course"""
+    async def show_course_plan_management(self, query, course_type: str) -> None:
+        """Show plan management options for a specific course"""
         await query.answer()
         
-        plans = await self.load_course_plans(course_type)
+        course_names = {
+            'online_weights': '🏋️ وزنه آنلاین',
+            'online_cardio': '🏃 هوازی آنلاین',
+            'online_combo': '💪 ترکیبی آنلاین',
+            'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+            'in_person_weights': '🏋️‍♀️ وزنه حضوری'
+        }
+        
+        course_name = course_names.get(course_type, course_type)
+        
+        # Load plans to show counts
+        all_plans = await self.load_course_plans(course_type)
+        general_plans = [plan for plan in all_plans if not plan.get('is_user_specific', False)]
+        user_specific_plans = [plan for plan in all_plans if plan.get('is_user_specific', False)]
+        
+        text = f"""📋 مدیریت برنامه‌های {course_name}
+
+📊 آمار:
+• برنامه‌های عمومی: {len(general_plans)} عدد
+• برنامه‌های شخصی: {len(user_specific_plans)} عدد
+• جمع کل: {len(all_plans)} عدد
+
+🔧 عملیات موجود:"""
+        
+        keyboard = [
+            [InlineKeyboardButton("📤 آپلود برنامه جدید", callback_data=f'upload_plan_{course_type}')],
+            [InlineKeyboardButton("👁️ مشاهده برنامه‌های عمومی", callback_data=f'view_plans_{course_type}')],
+            [InlineKeyboardButton("📤 ارسال برنامه به کاربران", callback_data=f'send_plan_{course_type}')],
+            [InlineKeyboardButton("🔙 بازگشت به مدیریت برنامه‌ها", callback_data='admin_plans')]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def show_existing_plans(self, query, course_type: str) -> None:
+        """Show existing plans for a course (excluding user-specific plans)"""
+        await query.answer()
+        
+        all_plans = await self.load_course_plans(course_type)
+        
+        # Filter out user-specific plans - only show general plans
+        plans = [plan for plan in all_plans if not plan.get('is_user_specific', False)]
         
         if not plans:
-            text = "❌ هیچ برنامه‌ای برای این دوره یافت نشد!"
+            text = "❌ هیچ برنامه عمومی برای این دوره یافت نشد!\n\n💡 برنامه‌های شخصی کاربران در بخش مجزا نمایش داده می‌شوند."
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data=f'plan_course_{course_type}')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(text, reply_markup=reply_markup)
@@ -2114,7 +3238,9 @@ class AdminPanel:
         keyboard = []
         for i, plan in enumerate(plans[:10]):  # Show first 10 plans
             plan_title = plan.get('title', f'برنامه {i+1}')
-            keyboard.append([InlineKeyboardButton(f"📋 {plan_title}", callback_data=f'view_plan_{course_type}_{i}')])
+            # Use the original index from all_plans to maintain correct references
+            original_index = all_plans.index(plan)
+            keyboard.append([InlineKeyboardButton(f"📋 {plan_title}", callback_data=f'view_plan_{course_type}_{original_index}')])
         
         keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f'plan_course_{course_type}')])
         
@@ -2137,3 +3263,31 @@ class AdminPanel:
 💡 روی هر برنامه کلیک کنید تا جزئیات آن را مشاهده کرده و بتوانید آن را ویرایش یا حذف کنید."""
         
         await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def handle_skip_plan_description(self, query, context=None):
+        """Handle skipping plan description step"""
+        try:
+            await query.answer()
+            user_id = query.from_user.id
+            
+            # Set empty description and complete upload
+            if context and user_id in context.user_data:
+                context.user_data[user_id]['plan_description'] = ''
+            
+            # Import main bot instance to call complete_plan_upload
+            from main import bot
+            
+            # Create a dummy update object for complete_plan_upload
+            class DummyUpdate:
+                def __init__(self, user_id):
+                    self.effective_user = type('', (), {'id': user_id})()
+                    self.message = query.message
+            
+            dummy_update = DummyUpdate(user_id)
+            await bot.complete_plan_upload(dummy_update, context)
+            
+        except Exception as e:
+            await admin_error_handler.log_admin_error(
+                user_id, e, "skip_plan_description", query
+            )
+            await query.message.reply_text("❌ خطا در رد کردن توضیحات! لطفاً مجددا تلاش کنید.")
