@@ -688,6 +688,78 @@ class AdminErrorHandler:
         
         return states_cleared
 
+    async def setup_admin_directories(self):
+        """Create organized directory structure for admin operations"""
+        directories = [
+            'admin_data',
+            'admin_data/course_plans',
+            'admin_data/uploads',
+            'admin_data/exports',
+            'admin_data/backups'
+        ]
+        
+        created_dirs = []
+        for directory in directories:
+            try:
+                os.makedirs(directory, exist_ok=True)
+                created_dirs.append(directory)
+            except Exception as e:
+                self.admin_logger.error(f"Failed to create directory {directory}: {e}")
+        
+        if created_dirs:
+            self.admin_logger.info(f"✅ Admin directory structure created: {', '.join(created_dirs)}")
+        
+        return created_dirs
+
+    async def migrate_legacy_admin_files(self):
+        """Migrate legacy admin files to organized structure"""
+        import shutil
+        migration_results = []
+        
+        # Define legacy file mappings to new locations
+        legacy_mappings = [
+            ('course_plans_*.json', 'admin_data/course_plans/'),
+            ('admin_audit.json', 'admin_data/'),
+            ('admin_operations.log', 'logs/'),
+            ('admin_errors.log', 'logs/')
+        ]
+        
+        for pattern, target_dir in legacy_mappings:
+            try:
+                import glob
+                if '*' in pattern:
+                    # Handle wildcard patterns
+                    files = glob.glob(pattern)
+                    for file_path in files:
+                        if os.path.exists(file_path):
+                            filename = os.path.basename(file_path)
+                            # Remove prefix for course plans
+                            if 'course_plans_' in filename:
+                                new_filename = filename.replace('course_plans_', '').replace('.json', '.json')
+                            else:
+                                new_filename = filename
+                            
+                            target_path = os.path.join(target_dir, new_filename)
+                            os.makedirs(target_dir, exist_ok=True)
+                            shutil.move(file_path, target_path)
+                            migration_results.append(f"✅ {file_path} → {target_path}")
+                            self.admin_logger.info(f"Migrated {file_path} to {target_path}")
+                else:
+                    # Handle single files
+                    if os.path.exists(pattern):
+                        filename = os.path.basename(pattern)
+                        target_path = os.path.join(target_dir, filename)
+                        os.makedirs(target_dir, exist_ok=True)
+                        shutil.move(pattern, target_path)
+                        migration_results.append(f"✅ {pattern} → {target_path}")
+                        self.admin_logger.info(f"Migrated {pattern} to {target_path}")
+                        
+            except Exception as e:
+                migration_results.append(f"❌ Failed to migrate {pattern}: {e}")
+                self.admin_logger.error(f"Failed to migrate {pattern}: {e}")
+        
+        return migration_results
+
     async def reset_questionnaire_state(self, user_id: int, questionnaire_manager, reason: str = "user_navigation"):
         """
         Reset questionnaire progress for a user

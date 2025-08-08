@@ -222,6 +222,15 @@ class FootballCoachBot:
         try:
             logger.info("🔧 Initializing admin sync from environment variables...")
             
+            # Setup admin directory structure
+            from admin_error_handler import admin_error_handler
+            await admin_error_handler.setup_admin_directories()
+            
+            # Migrate legacy admin files to organized structure
+            migration_results = await admin_error_handler.migrate_legacy_admin_files()
+            if migration_results:
+                logger.info(f"📁 Admin file migration completed: {len(migration_results)} operations")
+            
             # Check if using database mode
             if Config.USE_DATABASE:
                 await self._sync_admins_database()
@@ -1630,8 +1639,9 @@ class FootballCoachBot:
         description = admin_context.get('plan_description', '')
         
         # Create plan data
+        plan_id = str(len(await self.admin_panel.load_course_plans(course_type)) + 1)
         plan_data = {
-            'id': str(len(await self.admin_panel.load_course_plans(course_type)) + 1),
+            'id': plan_id,
             'title': title,
             'content': content,
             'content_type': content_type,

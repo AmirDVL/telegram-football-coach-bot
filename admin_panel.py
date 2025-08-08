@@ -2553,7 +2553,18 @@ class AdminPanel:
     async def load_course_plans(self, course_type: str) -> list:
         """Load plans for a specific course type"""
         try:
-            plans_file = f'course_plans_{course_type}.json'
+            # Create admin data directory structure if it doesn't exist
+            os.makedirs('admin_data/course_plans', exist_ok=True)
+            
+            plans_file = f'admin_data/course_plans/{course_type}.json'
+            
+            # Check for old file in root directory and migrate if exists
+            old_file = f'course_plans_{course_type}.json'
+            if os.path.exists(old_file) and not os.path.exists(plans_file):
+                import shutil
+                shutil.move(old_file, plans_file)
+                print(f"✅ Migrated {old_file} to {plans_file}")
+            
             if os.path.exists(plans_file):
                 with open(plans_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
@@ -2565,7 +2576,10 @@ class AdminPanel:
     async def save_course_plans(self, course_type: str, plans: list) -> bool:
         """Save plans for a specific course type"""
         try:
-            plans_file = f'course_plans_{course_type}.json'
+            # Ensure admin data directory structure exists
+            os.makedirs('admin_data/course_plans', exist_ok=True)
+            
+            plans_file = f'admin_data/course_plans/{course_type}.json'
             
             # Log save attempt with detailed info
             from admin_error_handler import admin_error_handler
