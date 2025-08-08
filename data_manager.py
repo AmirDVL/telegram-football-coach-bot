@@ -7,10 +7,29 @@ import aiofiles
 class DataManager:
     def __init__(self, data_file='bot_data.json'):
         self.data_file = data_file
+        self.ensure_directories()
         self.ensure_data_file()
     
+    def ensure_directories(self):
+        """Create all required directories for bot operation"""
+        required_dirs = [
+            'logs',                          # Application logs
+            'user_documents',                # User uploaded documents
+            'questionnaire_photos',          # Questionnaire step photos
+            'user_plans',                    # Individual user training plans
+            'admin_data',                    # Admin management files
+            'admin_data/course_plans',       # Course-level training plans
+        ]
+        
+        for directory in required_dirs:
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except OSError as e:
+                print(f"Warning: Could not create directory {directory}: {e}")
+        
     def ensure_data_file(self):
-        """Ensure data file exists"""
+        """Ensure all data files exist with proper structure"""
+        # Main bot data file
         if not os.path.exists(self.data_file):
             with open(self.data_file, 'w', encoding='utf-8') as f:
                 json.dump({
@@ -22,6 +41,24 @@ class DataManager:
                         'course_stats': {}
                     }
                 }, f, ensure_ascii=False, indent=2)
+        
+        # Questionnaire data file  
+        if not os.path.exists('questionnaire_data.json'):
+            with open('questionnaire_data.json', 'w', encoding='utf-8') as f:
+                json.dump({}, f, ensure_ascii=False, indent=2)
+                
+        # Admins file
+        if not os.path.exists('admins.json'):
+            with open('admins.json', 'w', encoding='utf-8') as f:
+                json.dump({
+                    'admins': [],
+                    'last_sync': datetime.now().isoformat()
+                }, f, ensure_ascii=False, indent=2)
+        
+        # Coupons file
+        if not os.path.exists('coupons.json'):
+            with open('coupons.json', 'w', encoding='utf-8') as f:
+                json.dump({}, f, ensure_ascii=False, indent=2)
     
     async def save_user_data(self, user_id: int, data: Dict[str, Any]):
         """Save user data to file"""

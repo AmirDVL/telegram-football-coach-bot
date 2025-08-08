@@ -198,6 +198,19 @@ class FootballCoachBot:
         self.coupon_manager = CouponManager()
         self.payment_pending = {}
         self.user_coupon_codes = {}  # Store coupon codes entered by users
+        self.user_last_action = {}  # Cooldown protection - track last action time per user
+    
+    async def check_cooldown(self, user_id: int) -> bool:
+        """Check if user is in cooldown period (0.5s). Returns True if should skip action."""
+        current_time = time.time()
+        last_action = self.user_last_action.get(user_id, 0)
+        
+        if current_time - last_action < 0.5:  # 0.5 second cooldown
+            logger.debug(f"🕐 COOLDOWN - User {user_id} action skipped (too fast)")
+            return True
+            
+        self.user_last_action[user_id] = current_time
+        return False
     
     async def safe_edit_message(self, query, text, reply_markup=None, parse_mode=None):
         """Safely edit message to prevent 'Message is not modified' errors"""
@@ -445,6 +458,10 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
+        # Add cooldown protection for /start command  
+        if await self.check_cooldown(user_id):
+            return
+        
         # Log user interaction
         log_user_action(user_id, user_name, "executed /start command - MAIN HUB REDIRECT")
         
@@ -647,7 +664,6 @@ class FootballCoachBot:
                 keyboard = [
                     [InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')],
                     [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                    [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
                 ]
                 
                 # Only show questionnaire options if questionnaire is required for their courses
@@ -684,9 +700,9 @@ class FootballCoachBot:
 ❌توجه داشته باشید همه فیلدهای فرم رو پر کنید وبرای قسمت اعداد، کیورد اعداد انگلیسی رو وارد کنید"""
 
                 if course_count > 1:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ شما دارای {course_count} دوره فعال هستید!\n🎯 برنامه‌های تمرینی شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی، از منو استفاده کنید:"
                 else:
-                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 برنامه شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی یا تماس با مربی، از منو استفاده کنید:"
+                    welcome_text = f"سلام {user_name}! 👋\n\n✅ برنامه تمرینی شما برای دوره **{course_name}** آماده است!\n🎯 برنامه شخصی‌سازی شده شما آماده است!{nutrition_info}\n\n💪 برای دسترسی به برنامه تمرینی، از منو استفاده کنید:"
             else:
                 # User needs to complete questionnaire - check if questionnaire already exists
                 questionnaire_status = quest_req_status['questionnaire_status']
@@ -949,7 +965,7 @@ class FootballCoachBot:
             if admin_mode:
                 keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی ادمین", callback_data='admin_back_main')])
             reply_markup = InlineKeyboardMarkup(keyboard)
-            welcome_text = f"سلام {user_name}! 👋\n\n❌ متاسفانه پرداخت شما برای دوره **{course_name}** تایید نشد.\n\nمی‌توانید مجدداً پرداخت کنید یا با پشتیبانی تماس بگیرید:"
+            welcome_text = f"سلام {user_name}! 👋\n\n❌ متاسفانه پرداخت شما برای دوره **{course_name}** تایید نشد.\n\nمی‌توانید مجدداً پرداخت کنید یا با پشتیبانی @DrBohloul تماس بگیرید:"
             
         elif status == 'course_selected':
             # User has selected a course but hasn't paid yet - show course details and payment option
@@ -1300,7 +1316,7 @@ class FootballCoachBot:
     async def handle_coupon_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE, coupon_code: str) -> None:
         """Handle coupon code validation and processing"""
         user_id = update.effective_user.id
-        user_context = context.user_data.get(str(user_id), {})
+        user_context = context.user_data.get(user_id, {})
         course_type = user_context.get('coupon_course')
         
         # Safety check: Ensure we have valid coupon context
@@ -1319,11 +1335,11 @@ class FootballCoachBot:
             return
         
         # Clear coupon waiting state for this specific user
-        if str(user_id) not in context.user_data:
-            context.user_data[str(user_id)] = {}
-        context.user_data[str(user_id)]['waiting_for_coupon'] = False
-        if 'coupon_course' in context.user_data[str(user_id)]:
-            del context.user_data[str(user_id)]['coupon_course']
+        if user_id not in context.user_data:
+            context.user_data[user_id] = {}
+        context.user_data[user_id]['waiting_for_coupon'] = False
+        if 'coupon_course' in context.user_data[user_id]:
+            del context.user_data[user_id]['coupon_course']
         
         if not course_type:
             await update.message.reply_text(
@@ -1702,14 +1718,14 @@ class FootballCoachBot:
             # Different back button based on workflow with better navigation options
             if target_user_id:
                 keyboard = [
-                    [InlineKeyboardButton("� بازگشت به مدیریت این کاربر", callback_data=f'manage_user_course_{target_user_id}_{course_type}')],
+                    [InlineKeyboardButton("🔙 بازگشت به مدیریت این کاربر", callback_data=f'manage_user_course_{target_user_id}_{course_type}')],
                     [InlineKeyboardButton("📋 مدیریت کلیه برنامه‌ها", callback_data='admin_plans')],
                     [InlineKeyboardButton("🏠 بازگشت به پنل اصلی", callback_data='admin_back_main')]
                 ]
                 user_info = f"\n👤 برای کاربر: {target_user_id}"
             else:
                 keyboard = [
-                    [InlineKeyboardButton("� مدیریت برنامه‌های این دوره", callback_data=f'plan_course_{course_type}')],
+                    [InlineKeyboardButton("🔧 مدیریت برنامه‌های این دوره", callback_data=f'plan_course_{course_type}')],
                     [InlineKeyboardButton("📂 مدیریت کلیه برنامه‌ها", callback_data='admin_plans')],
                     [InlineKeyboardButton("🏠 بازگشت به پنل اصلی", callback_data='admin_back_main')]
                 ]
@@ -1752,6 +1768,10 @@ class FootballCoachBot:
         
         user_id = update.effective_user.id
         
+        # Add cooldown protection for payment actions
+        if await self.check_cooldown(user_id):
+            return
+        
         # Handle both regular payment and coupon payment
         if query.data.startswith('payment_coupon_'):
             course_type = query.data.replace('payment_coupon_', '')
@@ -1765,7 +1785,7 @@ class FootballCoachBot:
                 "⚠️ شما قبلاً این دوره را خریداری کرده‌اید!\n\n"
                 "✅ پرداخت شما تایید شده و دسترسی فعال است.\n\n"
                 "📋 اگر پرسشنامه را تکمیل نکرده‌اید، لطفاً تکمیل کنید.\n"
-                "📞 برای سوالات بیشتر با پشتیبانی تماس بگیرید.",
+                "📞 برای سوالات بیشتر با پشتیبانی @DrBohloul تماس بگیرید.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
                 ])
@@ -1778,7 +1798,7 @@ class FootballCoachBot:
                 "⏳ شما قبلاً برای این دوره پرداخت کرده‌اید!\n\n"
                 "🔍 پرداخت شما در حال بررسی توسط ادمین است.\n"
                 "📱 از نتیجه بررسی مطلع خواهید شد.\n\n"
-                "💡 اگر نیاز به پرداخت مجدد دارید، ابتدا با پشتیبانی تماس بگیرید.",
+                "💡 اگر نیاز به پرداخت مجدد دارید، ابتدا با پشتیبانی @DrBohloul تماس بگیرید.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')]
                 ])
@@ -2036,9 +2056,36 @@ class FootballCoachBot:
         # Check if user already has completed questionnaire
         existing_progress = await self.questionnaire_manager.load_user_progress(user_id)
         if existing_progress and existing_progress.get('completed', False):
-            # User already has completed questionnaire - redirect to course payment
-            await self.show_payment_details(update, context, course_type)
-            return
+            # User already has completed questionnaire - show confirmation and redirect to course payment
+            
+            # Check if user is buying additional course
+            user_context = context.user_data.get(user_id, {})
+            is_additional_purchase = user_context.get('buying_additional_course', False)
+            
+            if is_additional_purchase:
+                # Show confirmation message for additional course purchase
+                confirmation_message = """✅ عالی! شما قبلاً پرسشنامه را تکمیل کرده‌اید
+
+🎯 اطلاعات شخصی شما در سیستم موجود است و برای این دوره جدید نیز استفاده خواهد شد.
+
+💡 دیگر نیازی به تکمیل مجدد پرسشنامه نیست.
+
+📚 حالا می‌توانید برای دوره جدیدتان پرداخت کنید."""
+                
+                keyboard = [
+                    [InlineKeyboardButton("💳 ادامه به پرداخت", callback_data=f'payment_{course_type}')],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back_to_user_menu')]
+                ]
+                
+                await query.edit_message_text(
+                    confirmation_message,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return
+            else:
+                # Regular flow - redirect to payment
+                await self.show_payment_details(update, context, course_type)
+                return
         
         # Start or resume questionnaire (regardless of course type)
         if not existing_progress:
@@ -2146,7 +2193,7 @@ class FootballCoachBot:
 
 برای پرداخت به شماره کارت زیر واریز کنید:
 
-💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}
+💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
 💰 مبلغ: {final_price_text}"""
         else:
@@ -2156,7 +2203,7 @@ class FootballCoachBot:
 
 برای پرداخت به شماره کارت زیر واریز کنید:
 
-💳 شماره کارت: {Config.PAYMENT_CARD_NUMBER}
+💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
 💰 مبلغ: {final_price_text}"""
         
@@ -2190,9 +2237,9 @@ class FootballCoachBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if hasattr(update, 'callback_query') and update.callback_query:
-            await update.callback_query.edit_message_text(payment_message, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(payment_message, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text(payment_message, reply_markup=reply_markup)
+            await update.message.reply_text(payment_message, reply_markup=reply_markup, parse_mode='Markdown')
 
     async def handle_photo_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -2309,7 +2356,7 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
-        logger.debug(f"� Processing payment receipt from user {user_id} ({user_name})")
+        logger.debug(f"📋 Processing payment receipt from user {user_id} ({user_name})")
         
         # At this point, the photo router has already validated this is a payment receipt context
         # So we can proceed directly with payment processing
@@ -2520,13 +2567,13 @@ class FootballCoachBot:
 📊 ارسال شده: {course_attempts}/{max_attempts}
 🔧 تعداد اضافی از ادمین: {admin_allowed}
 
-💡 برای ارسال فیش بیشتر با پشتیبانی تماس بگیرید."""
+💡 برای ارسال فیش بیشتر با پشتیبانی @DrBohloul تماس بگیرید."""
                 else:
                     message = f"""❌ شما حداکثر 3 فیش برای این دوره ارسال کرده‌اید!
 
 📊 ارسال شده: {course_attempts}/3
 
-💡 برای ارسال فیش بیشتر با پشتیبانی تماس بگیرید.
+💡 برای ارسال فیش بیشتر با پشتیبانی @DrBohloul تماس بگیرید.
 📞 ادمین‌ها می‌توانند فرصت اضافی به شما بدهند."""
                 
                 return {
@@ -3578,7 +3625,7 @@ class FootballCoachBot:
         
         # COMPREHENSIVE DEBUG LOGGING for text input issue
         logger.info(f"🔍 TEXT INPUT HANDLER - User {user_id}: '{text_input[:50]}...'")
-        logger.debug(f"� Context user_data keys for user: {list(context.user_data.get(user_id, {}).keys())}")
+        logger.debug(f"🔍 Context user_data keys for user: {list(context.user_data.get(user_id, {}).keys())}")
         
         # STEP 1: Check if user is EXPLICITLY waiting for text input
         explicitly_waiting_for_text = await self._is_user_waiting_for_text_input(user_id, context)
@@ -4165,11 +4212,18 @@ class FootballCoachBot:
         elif query.data == 'edit_questionnaire':
             await self.edit_questionnaire(update, context)
         elif query.data == 'view_program':
-            await self.show_training_program(update, context, user_data)
+            # Check if user has multiple courses, if so show course selection
+            user_courses = await self.get_user_approved_courses(user_id)
+            if len(user_courses) > 1:
+                await self.show_course_selection_for_program(update, context, user_courses)
+            else:
+                await self.show_training_program(update, context, user_data)
         elif query.data == 'contact_support':
             await self.show_support_info(update, context)
-        elif query.data == 'contact_coach':
-            await self.show_coach_contact(update, context)
+        elif query.data.startswith('view_program_'):
+            # Handle course-specific program viewing
+            course_code = query.data.replace('view_program_', '')
+            await self.show_training_program(update, context, course_code=course_code)
         elif query.data == 'new_course':
             # Start new course selection process
             await self.start_new_course_selection(update, context)
@@ -4232,10 +4286,9 @@ class FootballCoachBot:
         if 'nutrition_plan' in purchased_courses:
             await query.edit_message_text(
                 "🥗 شما برنامه غذایی خریداری کرده‌اید!\n\n"
-                "برای دریافت برنامه غذایی شخصی‌سازی شده خود، لطفاً با مربی تماس بگیرید.\n\n"
+                "برای دریافت برنامه غذایی شخصی‌سازی شده، به پشتیبانی @DrBohloul پیام دهید.\n\n"
                 "برنامه‌های غذایی نیاز به پرسشنامه ندارند.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
                     [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
                     [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
                 ])
@@ -4633,15 +4686,81 @@ class FootballCoachBot:
             logger.error(f"Error in finish_edit_mode for user {user_id}: {e}")
             await query.edit_message_text("❌ خطا در ذخیره تغییرات.")
 
-    async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
-        """Show user's training program"""
+    async def get_user_approved_courses(self, user_id: int) -> list:
+        """Get all courses that a user has approved payments for"""
         try:
-            course_code = user_data.get('course', 'نامشخص')
+            bot_data = await self.data_manager.load_data('bot_data')
+            payments = bot_data.get('payments', {})
+            
+            user_courses = []
+            for payment_id, payment_data in payments.items():
+                if (payment_data.get('user_id') == user_id and 
+                    payment_data.get('status') == 'approved'):
+                    course_type = payment_data.get('course_type')
+                    if course_type and course_type not in user_courses:
+                        user_courses.append(course_type)
+            
+            return user_courses
+        except Exception as e:
+            logger.error(f"Error getting user approved courses: {e}")
+            return []
+
+    async def show_course_selection_for_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, courses: list) -> None:
+        """Show course selection for program viewing when user has multiple courses"""
+        try:
+            message = """📋 برنامه‌های تمرینی شما
+
+شما برای چندین دوره ثبت‌نام کرده‌اید. لطفاً دوره‌ای را که می‌خواهید برنامه آن را مشاهده کنید انتخاب کنید:"""
+
+            keyboard = []
+            for course_code in courses:
+                course_name = self.get_course_name_farsi(course_code)
+                keyboard.append([InlineKeyboardButton(course_name, callback_data=f'view_program_{course_code}')])
+            
+            keyboard.extend([
+                [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+            ])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+            
+        except Exception as e:
+            logger.error(f"Error in show_course_selection_for_program: {e}")
+
+    async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict = None, course_code: str = None) -> None:
+        """Show user's training program for a specific course"""
+        try:
+            user_id = update.effective_user.id
+            
+            # If no user_data provided, load it
+            if user_data is None:
+                user_data = await self.data_manager.get_user_data(user_id)
+            
+            # Determine which course to show
+            if course_code is None:
+                course_code = user_data.get('course', 'نامشخص')
+            
             course_name = self.get_course_name_farsi(course_code)
+            
+            # Check if user has a main plan assigned for this course
+            main_plan = await self.get_main_plan_for_user(str(user_id), course_code)
             
             # Handle nutrition plan differently
             if course_code == 'nutrition_plan':
-                message = f"""🥗 برنامه غذایی شما
+                if main_plan:
+                    message = f"""🥗 برنامه غذایی شما
+
+دوره: {course_name}
+
+⭐ برنامه اختصاصی شما آماده است!
+
+📋 نام برنامه: {main_plan.get('title', 'برنامه غذایی')}
+📅 تاریخ: {main_plan.get('created_at', '')[:10] if main_plan.get('created_at') else 'نامشخص'}
+
+برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید یا از دکمه زیر استفاده کنید:"""
+                else:
+                    message = f"""🥗 برنامه غذایی شما
 
 دوره: {course_name}
 
@@ -4649,28 +4768,45 @@ class FootballCoachBot:
 
 این برنامه بر اساس نیازهای تغذیه‌ای بازیکنان فوتبال طراحی شده است.
 
-برای دریافت برنامه کامل لطفاً با مربی تماس بگیرید:
+برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید:
 @username_coach
 
 یا از دکمه زیر استفاده کنید:"""
             else:
                 # Regular training courses
-                message = f"""📋 برنامه تمرینی شما
+                if main_plan:
+                    message = f"""📋 برنامه تمرینی شما
+
+دوره: {course_name}
+
+⭐ برنامه اختصاصی شما آماده است!
+
+📋 نام برنامه: {main_plan.get('title', 'برنامه تمرینی')}
+📅 تاریخ: {main_plan.get('created_at', '')[:10] if main_plan.get('created_at') else 'نامشخص'}
+
+برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید یا از دکمه زیر استفاده کنید:"""
+                else:
+                    message = f"""📋 برنامه تمرینی شما
 
 دوره: {course_name}
 
 برنامه تمرینی شخصی‌سازی شده شما بر اساس پاسخ‌های پرسشنامه آماده شده است.
 
-برای دریافت برنامه کامل لطفاً با مربی تماس بگیرید:
+برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید:
 @username_coach
 
 یا از دکمه زیر استفاده کنید:"""
             
-            keyboard = [
-                [InlineKeyboardButton("📞 تماس با مربی", callback_data='contact_coach')],
+            # Add download button if main plan exists
+            keyboard = []
+            if main_plan:
+                keyboard.append([InlineKeyboardButton("📋 دریافت برنامه", callback_data=f'get_main_plan_{course_code}')])
+            
+            keyboard.extend([
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
                 [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
-            ]
+            ])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
@@ -4680,6 +4816,85 @@ class FootballCoachBot:
             await admin_error_handler.handle_admin_error(
                 update, context, e, "show_training_program", update.effective_user.id
             )
+            
+    async def get_main_plan_for_user(self, user_id: str, course_code: str) -> dict:
+        """Get the main plan assigned to a user for a specific course"""
+        try:
+            # Load main plan assignments
+            main_plans_file = 'admin_data/main_plan_assignments.json'
+            if not os.path.exists(main_plans_file):
+                return None
+            
+            with open(main_plans_file, 'r', encoding='utf-8') as f:
+                main_plans = json.load(f)
+            
+            main_plan_id = main_plans.get(f"{user_id}_{course_code}")
+            if not main_plan_id:
+                return None
+            
+            # Find the plan details
+            plans_file = f'admin_data/course_plans/{course_code}.json'
+            if not os.path.exists(plans_file):
+                return None
+            
+            with open(plans_file, 'r', encoding='utf-8') as f:
+                all_plans = json.load(f)
+            
+            # Find the specific plan
+            for plan in all_plans:
+                if plan.get('id') == main_plan_id:
+                    # Check if this plan is for this user or general
+                    target_user = plan.get('target_user_id')
+                    if not target_user or str(target_user) == str(user_id):
+                        return plan
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error getting main plan for user {user_id} course {course_code}: {e}")
+            return None
+            
+    async def handle_get_main_plan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle user request to download their main plan"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        course_code = query.data.replace('get_main_plan_', '')
+        
+        main_plan = await self.get_main_plan_for_user(str(user_id), course_code)
+        
+        if not main_plan:
+            await query.answer("❌ برنامه‌ای یافت نشد!", show_alert=True)
+            return
+        
+        try:
+            # Send the plan to user
+            plan_content = main_plan.get('content')
+            plan_content_type = main_plan.get('content_type', 'document')
+            plan_title = main_plan.get('title', 'برنامه تمرینی')
+            plan_filename = main_plan.get('filename', 'برنامه')
+            
+            if plan_content:
+                caption = f"📋 {plan_title}\n\n💪 برنامه اختصاصی شما\n📄 فایل: {plan_filename}"
+                
+                if plan_content_type == 'photo':
+                    await query.message.reply_photo(
+                        photo=plan_content,
+                        caption=caption
+                    )
+                else:  # document or any other type
+                    await query.message.reply_document(
+                        document=plan_content,
+                        caption=caption
+                    )
+                
+                await query.answer("✅ برنامه ارسال شد!", show_alert=True)
+            else:
+                await query.answer("❌ فایل برنامه یافت نشد!", show_alert=True)
+        
+        except Exception as e:
+            logger.error(f"Error sending main plan to user {user_id}: {e}")
+            await query.answer("❌ خطا در ارسال برنامه!", show_alert=True)
 
     async def show_support_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show support contact information"""
@@ -4687,9 +4902,8 @@ class FootballCoachBot:
 
 برای دریافت پشتیبانی می‌توانید از روش‌های زیر استفاده کنید:
 
-🔹 تلگرام: @support_username
-🔹 شماره تماس: ۰۹۱۲۳۴۵۶۷۸۹
-🔹 ایمیل: support@example.com
+🔹 تلگرام: @DrBohloul
+🔹 پشتیبانی فنی: از طریق همین ربات
 
 ساعات پاسخگویی:
 شنبه تا پنج‌شنبه: ۹ صبح تا ۶ عصر
@@ -4697,31 +4911,6 @@ class FootballCoachBot:
         
         keyboard = [
             [InlineKeyboardButton("🔙 بازگشت", callback_data='my_status')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await self.safe_edit_message(
-            update.callback_query,
-            message, 
-            reply_markup=reply_markup, 
-            parse_mode='Markdown'
-        )
-
-    async def show_coach_contact(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show coach contact information"""
-        message = """👨‍💼 *تماس با مربی*
-
-برای دریافت برنامه تمرینی و مشاوره تخصصی:
-
-🔹 تلگرام: @coach_username
-🔹 شماره تماس: ۰۹۱۲۳۴۵۶۷۸۹
-
-⏰ مربی معمولاً ظرف ۲۴ ساعت پاسخ می‌دهد.
-
-نکته: لطفاً نام و نام خانوادگی خود را در پیام اول ذکر کنید."""
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 بازگشت", callback_data='view_program')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -4810,7 +4999,7 @@ def main():
     # Payment approval handlers - with more specific pattern to avoid conflicts with plan management
     application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_\\d+$|allow_extra_receipt_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_grant_receipt_approval, pattern='^grant_receipt_'))
-    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support|contact_coach|new_course|start_over|start_questionnaire)$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support||new_course|start_over|start_questionnaire|view_program_.+)$'))
     # Edit mode navigation handlers
     application.add_handler(CallbackQueryHandler(bot.handle_edit_navigation, pattern='^(edit_prev|edit_next)$'))
     application.add_handler(CallbackQueryHandler(bot.finish_edit_mode, pattern='^finish_edit$'))
@@ -4820,6 +5009,9 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.back_to_category, pattern='^back_to_(online|in_person)$'))
     # Admin coupon handlers (must come before generic admin_ handler)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(toggle_coupon_|delete_coupon_)'))
+    
+    # Main plan assignment handlers (must come before other patterns!)
+    application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(set_main_plan_|unset_main_plan_)'))
     
     # New person-centric plan management handlers (MUST come before legacy patterns!)
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(user_plans_|manage_user_course_|upload_user_plan_|send_user_plan_|view_user_plan_|delete_user_plan_|send_latest_plan_|confirm_delete_|export_user_)'))
@@ -4832,6 +5024,9 @@ def main():
     
     # Skip plan description handler
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^skip_plan_description$'))
+    
+    # User plan management handlers
+    application.add_handler(CallbackQueryHandler(bot.handle_get_main_plan, pattern='^get_main_plan_'))
     
     # Handle photo messages (payment receipts and questionnaire photos)
     application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo_input))

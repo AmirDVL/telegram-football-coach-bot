@@ -43,9 +43,15 @@ class Config:
     # Use JSON files as fallback if DB is not configured
     USE_DATABASE = os.getenv('USE_DATABASE', 'False').lower() == 'true'
     
-    # Payment Configuration
-    PAYMENT_CARD_NUMBER = "1234-5678-9012-3456"
-    PAYMENT_CARD_HOLDER = "محمد"
+    # Payment Configuration - Load from environment variables
+    PAYMENT_CARD_NUMBER = os.getenv('PAYMENT_CARD_NUMBER', '1234-5678-9012-3456')
+    PAYMENT_CARD_HOLDER = os.getenv('PAYMENT_CARD_HOLDER', 'محمد')
+    
+    @staticmethod
+    def format_card_number(card_number: str) -> str:
+        """Format card number for RTL display and make it copyable in Telegram with Markdown"""
+        # Use code formatting with proper language specification for better monospace display
+        return f"```\n{card_number}\n```"
     
     @staticmethod
     def format_price(price: int) -> str:

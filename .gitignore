@@ -1,11 +1,8 @@
-# =================================================================
-# TELEGRAM FOOTBALL COACH BOT - LINUX PRODUCTION ONLY
-# =================================================================
-# SECURITY HARDENED - Zero development files, Linux servers only
+# Telegram Football Coach Bot - Production .gitignore
 
-# ================================
-# 🔒 SENSITIVE DATA & SECRETS
-# ================================
+# =================================================================
+# SENSITIVE DATA & SECRETS - NEVER COMMIT
+# =================================================================
 .env
 .env.*
 !.env.example
@@ -20,36 +17,33 @@ api_keys.*
 tokens.*
 private/
 
-# ================================
-# 📊 RUNTIME DATA & LOGS  
-# ================================
+# =================================================================
+# RUNTIME DATA & USER FILES - EXCLUDE FROM VERSION CONTROL
+# =================================================================
 bot_data.json
 questionnaire_data.json
 admins.json
+coupons.json
 course_plans_*.json
+
+# User uploaded files
 user_documents/
 questionnaire_photos/
 exports/
 backups/
+user_plans/
+admin_data/
+
+# Logs and monitoring  
 logs/
 *.log
 *.log.*
 monitoring/
 audit/
 
-# ================================
-# 💾 DATABASE & STORAGE
-# ================================
-*.db
-*.sqlite*
-*.sql
-!schema.sql
-database/
-data/
-
-# ================================
-# 🛠️ PYTHON RUNTIME
-# ================================
+# =================================================================
+# PYTHON RUNTIME FILES
+# =================================================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -62,9 +56,19 @@ venv_prod/
 *.egg-info/
 .pytest_cache/
 
-# ================================
-# 🧪 DEVELOPMENT FILES - EXCLUDED
-# ================================
+# =================================================================
+# DATABASE FILES (if using SQLite)
+# =================================================================
+*.db
+*.sqlite*
+*.sql
+!schema.sql
+database/
+data/
+
+# =================================================================
+# DEVELOPMENT & DEBUG FILES - PRODUCTION EXCLUDES
+# =================================================================
 test_*.py
 *_test.py
 debug_*.py
@@ -91,13 +95,72 @@ bootstrap.py
 manage.py
 sandbox/
 playground/
+demo_*.py
+manual_*.py
+force_*.py
+temp_*
+*_backup.py
+*_temp.*
 
-# ================================
-# 📚 DOCUMENTATION - EXCLUDED
-# ================================
+# =================================================================
+# DOCUMENTATION & DEVELOPMENT NOTES
+# =================================================================
 *.md
 !README.md
 docs/
+DEPLOYMENT_*.md
+SECURITY_*.md
+ADMIN_*.md
+FIXES_*.md
+BUG_*.md
+GUIDE_*.md
+SUMMARY_*.md
+COMPLETE_*.md
+CLEANUP_*.md
+IMPLEMENTATION_*.md
+IMPROVEMENTS_*.md
+*_FIXES_*.md
+*_COMPLETE.md
+*_SUMMARY.md
+*_GUIDE.md
+
+# =================================================================
+# BACKUP & DEPLOYMENT SCRIPTS
+# =================================================================
+backup_scripts/
+dev_backups/
+*.sh
+*.bat
+*.ps1
+deploy_*
+setup_*
+run.*
+update.*
+manage.*
+startup.*
+bootstrap.*
+production_*
+linux_*
+
+# =================================================================
+# IDE & EDITOR FILES
+# =================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# =================================================================
+# TEMPORARY FILES
+# =================================================================
+tmp/
+temp/
+.tmp/
+*.tmp
+*.temp
 ADMIN_*.md
 CRITICAL_*.md
 ENHANCED_*.md

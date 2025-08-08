@@ -121,7 +121,7 @@ class AdminPanel:
             logger.info(f"🎯 ROUTING: manage_user_course_ -> {callback_data}")
             parts = callback_data.split('_', 3)
             user_id, course_code = parts[3].split('_', 1)
-            await self.show_user_course_plan_management(query, user_id, course_code)
+            await self.show_user_course_plan_management_enhanced(query, user_id, course_code)
         elif callback_data.startswith('confirm_delete_'):
             logger.info(f"🎯 ROUTING: confirm_delete_ -> {callback_data}")
             # confirm_delete_USER_ID_COURSE_CODE_PLAN_ID
@@ -143,6 +143,38 @@ class AdminPanel:
         elif callback_data.startswith(('upload_user_plan_', 'send_user_plan_', 'view_user_plan_', 'delete_user_plan_', 'send_latest_plan_')):
             logger.info(f"🎯 ROUTING: new plan management callback -> {callback_data}")
             await self.handle_new_plan_callback_routing(query, context)
+        
+        # Main plan assignment callbacks
+        elif callback_data.startswith('set_main_plan_'):
+            parts = callback_data.replace('set_main_plan_', '').split('_')
+            if len(parts) >= 3:
+                user_id = parts[0]
+                # Handle different course code formats
+                if len(parts) >= 5 and parts[1] == 'in' and parts[2] == 'person':
+                    course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
+                    plan_id = '_'.join(parts[4:])
+                elif len(parts) >= 4 and parts[1] == 'online':
+                    course_code = f"{parts[1]}_{parts[2]}"
+                    plan_id = '_'.join(parts[3:])
+                else:
+                    course_code = parts[1]
+                    plan_id = '_'.join(parts[2:])
+                await self.handle_set_main_plan(query, user_id, course_code, plan_id)
+        elif callback_data.startswith('unset_main_plan_'):
+            parts = callback_data.replace('unset_main_plan_', '').split('_')
+            if len(parts) >= 3:
+                user_id = parts[0]
+                # Handle different course code formats
+                if len(parts) >= 5 and parts[1] == 'in' and parts[2] == 'person':
+                    course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
+                    plan_id = '_'.join(parts[4:])
+                elif len(parts) >= 4 and parts[1] == 'online':
+                    course_code = f"{parts[1]}_{parts[2]}"
+                    plan_id = '_'.join(parts[3:])
+                else:
+                    course_code = parts[1]
+                    plan_id = '_'.join(parts[2:])
+                await self.handle_unset_main_plan(query, user_id, course_code, plan_id)
             
         # Legacy plan management callbacks (keeping for backward compatibility)
         elif callback_data.startswith(('plan_course_', 'upload_plan_', 'send_plan_', 'view_plans_', 'send_to_user_', 'send_to_all_', 'view_plan_')):
@@ -356,12 +388,13 @@ class AdminPanel:
             pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
             rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
             
-            # Course statistics
+            # Course statistics - Count actual payments by course type (not user course field)
             course_stats = {}
-            for user_data in users.values():
-                course = user_data.get('course')
-                if course:
-                    course_stats[course] = course_stats.get(course, 0) + 1
+            for payment_data in payments.values():
+                if payment_data.get('status') == 'approved':  # Only count approved payments
+                    course = payment_data.get('course_type')
+                    if course:
+                        course_stats[course] = course_stats.get(course, 0) + 1
             
             stats_text = "📊 آمار کلی ربات:\n\n"
             stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
@@ -411,12 +444,13 @@ class AdminPanel:
             pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
             rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
             
-            # Course statistics
+            # Course statistics - Count actual payments by course type (not user course field)  
             course_stats = {}
-            for user_data in users.values():
-                course = user_data.get('course')
-                if course:
-                    course_stats[course] = course_stats.get(course, 0) + 1
+            for payment_data in payments.values():
+                if payment_data.get('status') == 'approved':  # Only count approved payments
+                    course = payment_data.get('course_type')
+                    if course:
+                        course_stats[course] = course_stats.get(course, 0) + 1
             
             stats_text = "📊 آمار کلی ربات:\n\n"
             stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
@@ -433,7 +467,8 @@ class AdminPanel:
                     'online_cardio': 'هوازی آنلاین', 
                     'online_combo': 'ترکیبی آنلاین',
                     'in_person_cardio': 'هوازی حضوری',
-                    'in_person_weights': 'وزنه حضوری'
+                    'in_person_weights': 'وزنه حضوری',
+                    'nutrition_plan': 'برنامه غذایی'
                 }.get(course, course)
                 
                 stats_text += f"\n• {course_name}: {count} نفر"
@@ -2454,6 +2489,11 @@ class AdminPanel:
             if course_plans:
                 text += f"📚 برنامه‌های موجود ({len(course_plans)} عدد):\n\n"
                 
+                # Check current main plan for this user+course
+                current_main_plan = await self.get_main_plan_for_user_course(user_id, course_code)
+                if current_main_plan:
+                    text += f"⭐ برنامه اصلی فعلی: {current_main_plan}\n\n"
+                
                 # Sort plans by created date (newest first)
                 sorted_plans = sorted(course_plans, key=lambda x: x.get('created_at', ''), reverse=True)
                 
@@ -2462,7 +2502,13 @@ class AdminPanel:
                     plan_type = plan.get('content_type', 'document')
                     file_name = plan.get('filename', 'نامشخص')
                     
-                    text += f"{i}. 📄 {file_name}\n"
+                    plan_id = plan.get('id', f'plan_{i}')
+                    
+                    # Check if this plan is the current main plan
+                    is_main_plan = (current_main_plan == plan_id)
+                    main_indicator = " ⭐ (برنامه اصلی)" if is_main_plan else ""
+                    
+                    text += f"{i}. 📄 {file_name}{main_indicator}\n"
                     text += f"   📅 {created_at}\n"
                     text += f"   📋 نوع: {plan_type}\n"
                     
@@ -3382,3 +3428,203 @@ class AdminPanel:
                 user_id, e, "skip_plan_description", query
             )
             await query.message.reply_text("❌ خطا در رد کردن توضیحات! لطفاً مجددا تلاش کنید.")
+
+    # =====================================
+    # MAIN PLAN ASSIGNMENT SYSTEM
+    
+    async def show_user_course_plan_management_enhanced(self, query, user_id: str, course_code: str) -> None:
+        """Enhanced version of plan management with main plan assignment"""
+        try:
+            await query.answer()
+            
+            # Load user data and plans
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                bot_data = json.load(f)
+            
+            user_data = bot_data.get('users', {}).get(user_id, {})
+            user_name = user_data.get('name', 'نامشخص')
+            
+            user_plans = await self.load_user_plans(user_id)
+            course_plans = user_plans.get(course_code, [])
+            
+            course_names = {
+                'online_weights': '🏋️ وزنه آنلاین',
+                'online_cardio': '🏃 هوازی آنلاین',
+                'online_combo': '💪 ترکیبی آنلاین',
+                'in_person_cardio': '🏃‍♂️ هوازی حضوری',
+                'in_person_weights': '🏋️‍♀️ وزنه حضوری',
+                'nutrition_plan': '🥗 برنامه غذایی'
+            }
+            course_name = course_names.get(course_code, course_code)
+            
+            keyboard = [
+                [InlineKeyboardButton("📤 آپلود برنامه جدید", callback_data=f'upload_user_plan_{user_id}_{course_code}')]
+            ]
+            
+            text = f"📋 مدیریت برنامه {course_name}\n"
+            text += f"👤 کاربر: {user_name}\n\n"
+            
+            if course_plans:
+                # Check current main plan
+                current_main_plan = await self.get_main_plan_for_user_course(user_id, course_code)
+                
+                text += f"📚 برنامه‌های موجود ({len(course_plans)} عدد):\n"
+                if current_main_plan:
+                    text += f"⭐ برنامه اصلی فعلی: {current_main_plan}\n"
+                text += "\n"
+                
+                # Sort plans by created date (newest first)
+                sorted_plans = sorted(course_plans, key=lambda x: x.get('created_at', ''), reverse=True)
+                
+                for i, plan in enumerate(sorted_plans, 1):
+                    created_at = plan.get('created_at', 'نامشخص')[:16].replace('T', ' ')
+                    plan_type = plan.get('content_type', 'document')
+                    file_name = plan.get('filename', 'نامشخص')
+                    plan_id = plan.get('id', f'plan_{i}')
+                    
+                    # Check if this is the main plan
+                    is_main_plan = (current_main_plan == plan_id)
+                    main_indicator = " ⭐ (برنامه اصلی)" if is_main_plan else ""
+                    
+                    text += f"{i}. 📄 {file_name}{main_indicator}\n"
+                    text += f"   📅 {created_at}\n"
+                    text += f"   📋 نوع: {plan_type}\n"
+                    
+                    # Create buttons for each plan
+                    plan_buttons = [
+                        InlineKeyboardButton(f"📤 ارسال {i}", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}'),
+                        InlineKeyboardButton(f"🗑 حذف {i}", callback_data=f'delete_user_plan_{user_id}_{course_code}_{plan_id}')
+                    ]
+                    
+                    # Add main plan toggle button
+                    if is_main_plan:
+                        plan_buttons.append(InlineKeyboardButton("❌ حذف از اصلی", callback_data=f'unset_main_plan_{user_id}_{course_code}_{plan_id}'))
+                    else:
+                        plan_buttons.append(InlineKeyboardButton("⭐ انتخاب اصلی", callback_data=f'set_main_plan_{user_id}_{course_code}_{plan_id}'))
+                    
+                    keyboard.append(plan_buttons)
+                    text += "\n"
+                
+                keyboard.append([InlineKeyboardButton("📤 ارسال آخرین برنامه", callback_data=f'send_latest_plan_{user_id}_{course_code}')])
+            else:
+                text += "📭 هنوز هیچ برنامه‌ای برای این کاربر و دوره آپلود نشده است.\n\n"
+                text += "📤 برای شروع، روی 'آپلود برنامه جدید' کلیک کنید."
+            
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f'user_plans_{user_id}')])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"show_user_course_plan_management:{user_id}:{course_code}", query.from_user.id
+            )
+
+    # MAIN PLAN ASSIGNMENT SYSTEM
+    # =====================================
+    
+    async def get_main_plan_for_user_course(self, user_id: str, course_code: str) -> str:
+        """Get the main plan ID assigned to a user for a specific course"""
+        try:
+            # Load main plan assignments
+            main_plans_file = 'admin_data/main_plan_assignments.json'
+            if os.path.exists(main_plans_file):
+                with open(main_plans_file, 'r', encoding='utf-8') as f:
+                    main_plans = json.load(f)
+                
+                return main_plans.get(f"{user_id}_{course_code}")
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error getting main plan for user {user_id} course {course_code}: {e}")
+            return None
+    
+    async def set_main_plan_for_user_course(self, user_id: str, course_code: str, plan_id: str) -> bool:
+        """Set a plan as the main plan for a user's specific course"""
+        try:
+            # Load or create main plan assignments
+            main_plans_file = 'admin_data/main_plan_assignments.json'
+            main_plans = {}
+            
+            if os.path.exists(main_plans_file):
+                with open(main_plans_file, 'r', encoding='utf-8') as f:
+                    main_plans = json.load(f)
+            
+            # Set the main plan
+            main_plans[f"{user_id}_{course_code}"] = plan_id
+            
+            # Create directory if it doesn't exist
+            os.makedirs('admin_data', exist_ok=True)
+            
+            # Save updated assignments
+            with open(main_plans_file, 'w', encoding='utf-8') as f:
+                json.dump(main_plans, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error setting main plan for user {user_id} course {course_code}: {e}")
+            return False
+    
+    async def unset_main_plan_for_user_course(self, user_id: str, course_code: str) -> bool:
+        """Remove main plan assignment for a user's specific course"""
+        try:
+            main_plans_file = 'admin_data/main_plan_assignments.json'
+            if not os.path.exists(main_plans_file):
+                return True  # Nothing to remove
+            
+            with open(main_plans_file, 'r', encoding='utf-8') as f:
+                main_plans = json.load(f)
+            
+            # Remove the assignment if it exists
+            key = f"{user_id}_{course_code}"
+            if key in main_plans:
+                del main_plans[key]
+                
+                # Save updated assignments
+                with open(main_plans_file, 'w', encoding='utf-8') as f:
+                    json.dump(main_plans, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error unsetting main plan for user {user_id} course {course_code}: {e}")
+            return False
+
+    async def handle_set_main_plan(self, query, user_id: str, course_code: str, plan_id: str) -> None:
+        """Handle setting a plan as main plan"""
+        try:
+            await query.answer("⭐ در حال تنظیم برنامه اصلی...")
+            
+            success = await self.set_main_plan_for_user_course(user_id, course_code, plan_id)
+            
+            if success:
+                await query.answer("✅ برنامه اصلی تنظیم شد!", show_alert=True)
+            else:
+                await query.answer("❌ خطا در تنظیم برنامه اصلی!", show_alert=True)
+            
+            # Refresh the plan management interface
+            await self.show_user_course_plan_management_enhanced(query, user_id, course_code)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"set_main_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
+            )
+
+    async def handle_unset_main_plan(self, query, user_id: str, course_code: str, plan_id: str) -> None:
+        """Handle removing main plan designation"""
+        try:
+            await query.answer("🔸 در حال حذف برنامه اصلی...")
+            
+            success = await self.unset_main_plan_for_user_course(user_id, course_code)
+            
+            if success:
+                await query.answer("✅ برنامه اصلی حذف شد!", show_alert=True)
+            else:
+                await query.answer("❌ خطا در حذف برنامه اصلی!", show_alert=True)
+            
+            # Refresh the plan management interface
+            await self.show_user_course_plan_management_enhanced(query, user_id, course_code)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, f"unset_main_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
+            )
