@@ -4729,7 +4729,7 @@ class FootballCoachBot:
             logger.error(f"Error in show_course_selection_for_program: {e}")
 
     async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict = None, course_code: str = None) -> None:
-        """Show user's training program for a specific course"""
+        """Show user's training program - displays all purchased courses and their assigned main plans"""
         try:
             user_id = update.effective_user.id
             
@@ -4737,10 +4737,86 @@ class FootballCoachBot:
             if user_data is None:
                 user_data = await self.data_manager.get_user_data(user_id)
             
-            # Determine which course to show
-            if course_code is None:
-                course_code = user_data.get('course', 'نامشخص')
+            # Get all purchased courses
+            purchased_courses = await self.get_user_purchased_courses(user_id)
             
+            if not purchased_courses:
+                message = """📋 برنامه‌های شما
+
+❌ شما هنوز هیچ دوره‌ای خریداری نکرده‌اید.
+
+برای خرید دوره جدید از دکمه زیر استفاده کنید:"""
+                keyboard = [
+                    [InlineKeyboardButton("🛒 خرید دوره جدید", callback_data='new_course')],
+                    [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+                return
+            
+            # If specific course requested, show only that course
+            if course_code and course_code in purchased_courses:
+                await self.show_single_course_program(update, context, user_data, course_code)
+                return
+            
+            # Show all purchased courses and their main plans
+            message = f"""📋 برنامه‌های شما
+
+شما مالک {len(purchased_courses)} دوره هستید:
+
+"""
+            
+            keyboard = []
+            has_any_plan = False
+            
+            for course in purchased_courses:
+                course_name = self.get_course_name_farsi(course)
+                main_plan = await self.get_main_plan_for_user(str(user_id), course)
+                
+                if main_plan:
+                    has_any_plan = True
+                    plan_title = main_plan.get('title', 'برنامه بدون عنوان')
+                    plan_date = main_plan.get('created_at', '')[:10] if main_plan.get('created_at') else 'نامشخص'
+                    
+                    message += f"✅ **{course_name}**\n"
+                    message += f"   📋 برنامه اختصاصی: {plan_title}\n"
+                    message += f"   📅 تاریخ: {plan_date}\n\n"
+                    
+                    # Add button to view/download this course's plan
+                    keyboard.append([InlineKeyboardButton(f"📋 دریافت برنامه {course_name}", callback_data=f'get_main_plan_{course}')])
+                else:
+                    message += f"⏳ **{course_name}**\n"
+                    message += f"   📋 برنامه اختصاصی در حال آماده‌سازی...\n\n"
+                    
+                    # Add button to view course details
+                    keyboard.append([InlineKeyboardButton(f"👁️ مشاهده {course_name}", callback_data=f'view_program_{course}')])
+            
+            if has_any_plan:
+                message += "💡 برای دریافت برنامه‌های آماده، روی دکمه‌های بالا کلیک کنید.\n"
+                message += "📞 برای سوالات بیشتر با @DrBohloul تماس بگیرید."
+            else:
+                message += "⏳ برنامه‌های اختصاصی شما در حال آماده‌سازی است.\n"
+                message += "📞 برای پیگیری با @DrBohloul تماس بگیرید."
+            
+            # Add general buttons
+            keyboard.extend([
+                [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+            ])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            logging.error(f"Error in show_training_program: {e}")
+            await admin_error_handler.handle_admin_error(
+                update, context, e, "show_training_program", update.effective_user.id
+            )
+    
+    async def show_single_course_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict, course_code: str) -> None:
+        """Show training program for a specific course"""
+        try:
+            user_id = update.effective_user.id
             course_name = self.get_course_name_farsi(course_code)
             
             # Check if user has a main plan assigned for this course
@@ -4768,10 +4844,7 @@ class FootballCoachBot:
 
 این برنامه بر اساس نیازهای تغذیه‌ای بازیکنان فوتبال طراحی شده است.
 
-برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید:
-@username_coach
-
-یا از دکمه زیر استفاده کنید:"""
+برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید یا از دکمه زیر استفاده کنید:"""
             else:
                 # Regular training courses
                 if main_plan:
@@ -4792,10 +4865,7 @@ class FootballCoachBot:
 
 برنامه تمرینی شخصی‌سازی شده شما بر اساس پاسخ‌های پرسشنامه آماده شده است.
 
-برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید:
-@username_coach
-
-یا از دکمه زیر استفاده کنید:"""
+برای دریافت برنامه کامل لطفاً به پشتیبانی @DrBohloul پیام دهید یا از دکمه زیر استفاده کنید:"""
             
             # Add download button if main plan exists
             keyboard = []
@@ -4803,18 +4873,18 @@ class FootballCoachBot:
                 keyboard.append([InlineKeyboardButton("📋 دریافت برنامه", callback_data=f'get_main_plan_{course_code}')])
             
             keyboard.extend([
+                [InlineKeyboardButton("🔙 همه برنامه‌ها", callback_data='view_program')],
                 [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
             ])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
             
         except Exception as e:
-            logging.error(f"Error in show_training_program: {e}")
+            logging.error(f"Error in show_single_course_program: {e}")
             await admin_error_handler.handle_admin_error(
-                update, context, e, "show_training_program", update.effective_user.id
+                update, context, e, "show_single_course_program", update.effective_user.id
             )
             
     async def get_main_plan_for_user(self, user_id: str, course_code: str) -> dict:
@@ -4823,31 +4893,50 @@ class FootballCoachBot:
             # Load main plan assignments
             main_plans_file = 'admin_data/main_plan_assignments.json'
             if not os.path.exists(main_plans_file):
+                logger.debug(f"Main plans file not found: {main_plans_file}")
                 return None
             
             with open(main_plans_file, 'r', encoding='utf-8') as f:
                 main_plans = json.load(f)
             
-            main_plan_id = main_plans.get(f"{user_id}_{course_code}")
+            assignment_key = f"{user_id}_{course_code}"
+            main_plan_id = main_plans.get(assignment_key)
+            
+            logger.debug(f"🔍 get_main_plan_for_user: user_id={user_id}, course_code={course_code}")
+            logger.debug(f"🔍 Looking for assignment key: {assignment_key}")
+            logger.debug(f"🔍 Available assignments: {list(main_plans.keys())}")
+            logger.debug(f"🔍 Found plan ID: {main_plan_id}")
+            
             if not main_plan_id:
+                logger.debug(f"No main plan assigned for {assignment_key}")
                 return None
             
             # Find the plan details
             plans_file = f'admin_data/course_plans/{course_code}.json'
             if not os.path.exists(plans_file):
+                logger.debug(f"Course plans file not found: {plans_file}")
                 return None
             
             with open(plans_file, 'r', encoding='utf-8') as f:
                 all_plans = json.load(f)
             
+            logger.debug(f"🔍 Searching for plan ID {main_plan_id} in {len(all_plans)} plans")
+            
             # Find the specific plan
             for plan in all_plans:
+                plan_id = plan.get('id')
+                target_user = plan.get('target_user_id')
+                logger.debug(f"🔍 Checking plan: id={plan_id}, target_user={target_user}")
+                
                 if plan.get('id') == main_plan_id:
                     # Check if this plan is for this user or general
-                    target_user = plan.get('target_user_id')
                     if not target_user or str(target_user) == str(user_id):
+                        logger.debug(f"✅ Found matching main plan: {plan.get('title')}")
                         return plan
+                    else:
+                        logger.debug(f"❌ Plan found but target_user mismatch: {target_user} != {user_id}")
             
+            logger.debug(f"❌ Plan ID {main_plan_id} not found in course plans")
             return None
         except Exception as e:
             logger.error(f"Error getting main plan for user {user_id} course {course_code}: {e}")
@@ -4941,6 +5030,7 @@ class FootballCoachBot:
             'online_cardio': 'آنلاین - برنامه هوازی و کار با توپ',
             'online_weights': 'آنلاین - برنامه وزنه',
             'online_combo': 'آنلاین - برنامه ترکیبی (وزنه + هوازی)',
+            'nutrition_plan': 'برنامه غذایی',
             'in_person_nutrition': 'حضوری - برنامه تغذیه',
             'online_nutrition': 'آنلاین - برنامه تغذیه'
         }

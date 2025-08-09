@@ -97,10 +97,15 @@ class AdminPanel:
         logger.debug(f"Routing callback: {callback_data}")
         
         # Main admin menu callbacks
-        if callback_data == 'admin_stats':
+        if callback_data == 'admin_menu':
+            await self.show_admin_hub_for_command_query(query, user_id)
+        elif callback_data == 'admin_stats':
             await self.show_statistics(query)
         elif callback_data == 'admin_users':
             await self.show_users_management(query)
+        elif callback_data.startswith('users_page_'):
+            page = int(callback_data.split('_')[2])
+            await self.show_users_management(query, page)
         elif callback_data == 'admin_payments':
             await self.show_payments_management(query)
         elif callback_data == 'admin_export_menu':
@@ -109,8 +114,6 @@ class AdminPanel:
             await self.show_coupon_management(query)
         elif callback_data == 'admin_plans':
             await self.show_plan_management(query)
-        elif callback_data == 'admin_debug':
-            await self.show_debug_panel(query, user_id)
             
         # New plan management callbacks - Person-centric approach
         elif callback_data.startswith('user_plans_'):
@@ -592,41 +595,87 @@ class AdminPanel:
         
         await query.edit_message_text(text, reply_markup=reply_markup)
     
-    async def show_users_management(self, query) -> None:
-        """Show users management"""
+    async def show_users_management(self, query, page: int = 0) -> None:
+        """Show users management with pagination and safe formatting"""
         try:
             with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             users = data.get('users', {})
             
+            # Convert to list for pagination
+            users_list = list(users.items())
+            users_list.reverse()  # Show newest first
+            
+            # Pagination logic
+            users_per_page = 10
+            total_users = len(users_list)
+            total_pages = max(1, (total_users + users_per_page - 1) // users_per_page)
+            current_page = max(0, min(page, total_pages - 1))
+            
+            start_idx = current_page * users_per_page
+            end_idx = start_idx + users_per_page
+            page_users = users_list[start_idx:end_idx]
+            
             text = "👥 مدیریت کاربران:\n\n"
-            text += f"📊 تعداد کل: {len(users)} کاربر\n\n"
+            text += f"📊 تعداد کل: {total_users} کاربر\n"
+            text += f"📄 صفحه {current_page + 1} از {total_pages}\n\n"
             
-            # Show recent 10 users
-            recent_users = list(users.items())[-10:]
+            if page_users:
+                text += "📋 فهرست کاربران:\n"
+                for user_id, user_data in page_users:
+                    name = user_data.get('name', 'نامشخص')
+                    username = user_data.get('username', '')
+                    course = user_data.get('course', 'انتخاب نشده')
+                    
+                    # Safely escape name and username for Markdown
+                    safe_name = self._escape_markdown_v2(name) if name else 'نامشخص'
+                    
+                    # Create clickable profile link with safe formatting
+                    if username:
+                        # Remove @ if present and create safe username
+                        clean_username = username.replace('@', '').replace('_', '\\_')
+                        profile_link = f"[{safe_name}](https://t.me/{clean_username})"
+                    else:
+                        profile_link = f"[{safe_name}](tg://user?id={user_id})"
+                    
+                    # Translate course name
+                    course_name = self._get_course_name_farsi(course)
+                    
+                    text += f"• {profile_link}\n"
+                    text += f"  🆔 ID: `{user_id}`\n"
+                    text += f"  📚 دوره: {course_name}\n\n"
+            else:
+                text += "هیچ کاربری یافت نشد.\n"
             
-            text += "🆕 آخرین کاربران:\n"
-            for user_id, user_data in recent_users:
-                name = user_data.get('name', 'نامشخص')
-                username = user_data.get('username', '')
-                course = user_data.get('course', 'انتخاب نشده')
-                
-                # Create clickable profile link
-                if username:
-                    profile_link = f"[{name}](https://t.me/{username})"
-                else:
-                    profile_link = f"[{name}](tg://user?id={user_id})"
-                
-                text += f"• {profile_link} ({user_id}) - {course}\n"
+            # Create pagination buttons
+            keyboard = []
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')]]
+            # Navigation row
+            nav_row = []
+            if current_page > 0:
+                nav_row.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f'users_page_{current_page - 1}'))
+            if current_page < total_pages - 1:
+                nav_row.append(InlineKeyboardButton("بعدی ➡️", callback_data=f'users_page_{current_page + 1}'))
+            
+            if nav_row:
+                keyboard.append(nav_row)
+            
+            # Back button
+            keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='MarkdownV2', disable_web_page_preview=True)
             
         except Exception as e:
-            await query.edit_message_text(f"❌ خطا: {str(e)}")
+            logger.error(f"Error in show_users_management: {e}")
+            await query.edit_message_text(
+                f"❌ خطا در نمایش کاربران:\n\n"
+                f"جزئیات: {str(e)}\n\n"
+                f"🔄 لطفاً دوباره تلاش کنید یا با مدیر سیستم تماس بگیرید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]])
+            )
     
     async def show_payments_management(self, query) -> None:
         """Show payments management"""
@@ -752,10 +801,9 @@ class AdminPanel:
             [InlineKeyboardButton("📊 آمار و گزارشات", callback_data='admin_stats'),
              InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
             [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
-             InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
+             InlineKeyboardButton("📤 اکسپورت داده‌ها", callback_data='admin_export_menu')],
             [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons'),
-             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')],
-            [InlineKeyboardButton("🔍 پنل دیباگ", callback_data='admin_debug')]
+             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')]
         ]
         
         if can_manage_admins:
@@ -769,6 +817,33 @@ class AdminPanel:
         welcome_text = f"🎛️ پنل مدیریت\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
         
         await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+
+    async def show_admin_hub_for_command_query(self, query, user_id: int) -> None:
+        """Show the unified admin hub when called from callback query (for back buttons)"""
+        is_super = await self.admin_manager.is_super_admin(user_id)
+        can_manage_admins = await self.admin_manager.can_add_admins(user_id)
+        user_name = query.from_user.first_name or "ادمین"
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 آمار و گزارشات", callback_data='admin_stats'),
+             InlineKeyboardButton("👥 مدیریت کاربران", callback_data='admin_users')],
+            [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
+             InlineKeyboardButton("📤 اکسپورت داده‌ها", callback_data='admin_export_menu')],
+            [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons'),
+             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')]
+        ]
+        
+        if can_manage_admins:
+            keyboard.append([InlineKeyboardButton("🔐 مدیریت ادمین‌ها", callback_data='admin_manage_admins')])
+        
+        keyboard.append([InlineKeyboardButton("👤 حالت کاربر", callback_data='admin_user_mode')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        admin_type = "🔥 سوپر ادمین" if is_super else "👤 ادمین"
+        welcome_text = f"🎛️ پنل مدیریت\n\nسلام {user_name}! 👋\n{admin_type} - مرکز فرماندهی ربات:\n\n📋 همه ابزارهای مدیریت در یک مکان"
+        
+        await query.edit_message_text(welcome_text, reply_markup=reply_markup)
 
     async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /add_admin command"""
@@ -2612,17 +2687,42 @@ class AdminPanel:
             return False
 
     async def delete_user_plan(self, user_id: str, course_code: str, plan_id: str) -> bool:
-        """Delete a specific plan for a user and course"""
+        """Delete a specific plan for a user and course - works with course-centric storage"""
         try:
-            user_plans = await self.load_user_plans(user_id)
+            # Load the course-specific plans file
+            plans_file = f'admin_data/course_plans/{course_code}.json'
             
-            if course_code in user_plans:
-                user_plans[course_code] = [
-                    plan for plan in user_plans[course_code] 
-                    if plan.get('id') != plan_id
-                ]
-                return await self.save_user_plans(user_id, user_plans)
-            return False
+            if not os.path.exists(plans_file):
+                logger.warning(f"Plans file not found: {plans_file}")
+                return False
+            
+            # Load all plans for this course
+            with open(plans_file, 'r', encoding='utf-8') as f:
+                all_plans = json.load(f)
+            
+            # Find and remove the specific plan
+            original_count = len(all_plans)
+            all_plans = [
+                plan for plan in all_plans 
+                if not (plan.get('id') == plan_id and str(plan.get('target_user_id')) == str(user_id))
+            ]
+            
+            if len(all_plans) < original_count:
+                # Save the updated plans back to the course file
+                with open(plans_file, 'w', encoding='utf-8') as f:
+                    json.dump(all_plans, f, ensure_ascii=False, indent=2)
+                
+                # Check if this was the main plan and unset it if so
+                current_main_plan = await self.get_main_plan_for_user_course(user_id, course_code)
+                if current_main_plan == plan_id:
+                    await self.unset_main_plan_for_user_course(user_id, course_code)
+                
+                logger.info(f"Successfully deleted plan {plan_id} for user {user_id} in course {course_code}")
+                return True
+            else:
+                logger.warning(f"Plan {plan_id} not found for user {user_id} in course {course_code}")
+                return False
+                
         except Exception as e:
             logger.error(f"Error deleting user plan for {user_id}, course {course_code}, plan {plan_id}: {e}")
             return False
@@ -3225,9 +3325,9 @@ class AdminPanel:
                         logger.warning(f"Could not delete physical file {file_path}: {e}")
                 
                 await query.edit_message_text(
-                    f"✅ برنامه '{plan_title}' برای کاربر {user_name} با موفقیت حذف شد!",
+                    f"✅ برنامه '{plan_title}' برای کاربر {user_name} با موفقیت حذف شد!\n\n🔄 در حال بروزرسانی لیست برنامه‌ها...",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                        [InlineKeyboardButton("🔙 بازگشت به لیست برنامه‌ها", callback_data=f'manage_user_course_{user_id}_{course_code}')]
                     ])
                 )
             else:
@@ -3628,3 +3728,30 @@ class AdminPanel:
             await admin_error_handler.handle_admin_error(
                 query, None, e, f"unset_main_plan:{user_id}:{course_code}:{plan_id}", query.from_user.id
             )
+    
+    def _escape_markdown_v2(self, text: str) -> str:
+        """Escape special characters for MarkdownV2"""
+        if not text:
+            return ""
+        
+        # List of characters that need to be escaped in MarkdownV2
+        escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        
+        escaped_text = text
+        for char in escape_chars:
+            escaped_text = escaped_text.replace(char, '\\' + char)
+        
+        return escaped_text
+    
+    def _get_course_name_farsi(self, course_code: str) -> str:
+        """Convert course code to Persian name"""
+        course_names = {
+            'online_weights': 'وزنه آنلاین',
+            'online_cardio': 'هوازی آنلاین', 
+            'online_combo': 'ترکیبی آنلاین',
+            'in_person_cardio': 'هوازی حضوری',
+            'in_person_weights': 'وزنه حضوری',
+            'nutrition_plan': 'برنامه غذایی',
+            'انتخاب نشده': 'انتخاب نشده'
+        }
+        return course_names.get(course_code, course_code)
