@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 class AdminPanel:
     def __init__(self):
-        self.admin_manager = AdminManager()
+        # Use bot_data.json for AdminManager to match main.py admin sync
+        self.admin_manager = AdminManager(admins_file='bot_data.json')
         self.data_manager = DataManager()
         self.coupon_manager = CouponManager()
         self.admin_creating_coupons = set()  # Track which admins are creating coupons

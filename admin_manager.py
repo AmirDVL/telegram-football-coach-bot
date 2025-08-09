@@ -39,7 +39,16 @@ class AdminManager:
         try:
             async with aiofiles.open(self.admins_file, 'r', encoding='utf-8') as f:
                 content = await f.read()
-                return json.loads(content) if content else {}
+                data = json.loads(content) if content else {}
+                
+                # Handle bot_data.json structure (nested under 'admins' key)
+                if 'admins' in data and isinstance(data['admins'], dict):
+                    return data['admins']
+                # Handle direct admins.json structure  
+                elif 'super_admin' in data:
+                    return data
+                else:
+                    return {}
         except Exception as e:
             print(f"Error loading admins: {e}")
             return {}
@@ -47,8 +56,22 @@ class AdminManager:
     async def save_admins(self, data: Dict[str, Any]) -> bool:
         """Save admins data"""
         try:
-            async with aiofiles.open(self.admins_file, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(data, ensure_ascii=False, indent=2))
+            # Handle bot_data.json structure (need to update nested 'admins' key)
+            if self.admins_file == 'bot_data.json':
+                # Load full bot_data.json
+                async with aiofiles.open(self.admins_file, 'r', encoding='utf-8') as f:
+                    bot_data = json.loads(await f.read())
+                
+                # Update admins section
+                bot_data['admins'] = data
+                
+                # Save full bot_data.json back
+                async with aiofiles.open(self.admins_file, 'w', encoding='utf-8') as f:
+                    await f.write(json.dumps(bot_data, ensure_ascii=False, indent=2))
+            else:
+                # Handle direct admins.json structure
+                async with aiofiles.open(self.admins_file, 'w', encoding='utf-8') as f:
+                    await f.write(json.dumps(data, ensure_ascii=False, indent=2))
             return True
         except Exception as e:
             print(f"Error saving admins: {e}")

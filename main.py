@@ -382,21 +382,17 @@ class FootballCoachBot:
                     logger.info(f"  🎖️ Admin {admin_id} {role_change}")
                     updated_count += 1
         
-        # Remove admins who are no longer in environment (only if they were added by env sync)
+        # Remove admins who are no longer in environment (AGGRESSIVE SYNC - removes ALL non-env admins)
         admins_to_remove = current_admin_ids - env_admin_ids
         for admin_id_to_remove in admins_to_remove:
-            admin_perms = admins_data['admin_permissions'].get(str(admin_id_to_remove), {})
-            
-            # Only remove if they were added by environment sync
-            if admin_perms.get('synced_from_config') or admin_perms.get('added_by') == 'env_sync':
-                # Remove from admins array
-                if admin_id_to_remove in admins_data['admins']:
-                    admins_data['admins'].remove(admin_id_to_remove)
-                # Remove permissions
-                if str(admin_id_to_remove) in admins_data['admin_permissions']:
-                    del admins_data['admin_permissions'][str(admin_id_to_remove)]
-                logger.info(f"  ❌ Removed admin from JSON: {admin_id_to_remove}")
-                removed_count += 1
+            # Remove from admins array
+            if admin_id_to_remove in admins_data['admins']:
+                admins_data['admins'].remove(admin_id_to_remove)
+            # Remove permissions
+            if str(admin_id_to_remove) in admins_data['admin_permissions']:
+                del admins_data['admin_permissions'][str(admin_id_to_remove)]
+            logger.info(f"  ❌ Removed admin from JSON: {admin_id_to_remove} (aggressive sync)")
+            removed_count += 1
         
         # Save updated admins data
         await self.data_manager.save_data('admins', admins_data)
