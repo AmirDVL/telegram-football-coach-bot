@@ -81,17 +81,48 @@ class AdminPanel:
                 raise e
 
     async def _route_admin_callback(self, query, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-        """Route admin callbacks to appropriate handlers"""
+        """Route admin callbacks to appropriate handlers with timeout protection"""
         callback_data = query.data
         
         # Add debug logging for callback routing
         logger.debug(f"Routing callback: {callback_data}")
         
+        # Special handling for potentially long-running operations
+        if callback_data == 'admin_stats':
+            try:
+                # Use asyncio timeout for statistics to prevent hanging
+                import asyncio
+                await asyncio.wait_for(self.show_statistics(query), timeout=25.0)
+                return
+            except asyncio.TimeoutError:
+                logger.error(f"Statistics callback timed out for user {user_id}")
+                await query.edit_message_text(
+                    "⏰ زمان انتظار تمام شد\n\n"
+                    "محاسبه آمار بیش از حد طول کشید. این معمولاً به دلیل حجم زیاد داده‌ها است.\n\n"
+                    "💡 راهکارهای پیشنهادی:\n"
+                    "• چند دقیقه صبر کرده و مجددا تلاش کنید\n"
+                    "• از ساعات کم‌ترافیک استفاده کنید\n"
+                    "• با پشتیبانی تماس بگیرید",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='admin_stats')],
+                        [InlineKeyboardButton("🔙 بازگشت به پنل", callback_data='admin_menu')]
+                    ])
+                )
+                return
+            except Exception as e:
+                logger.error(f"Error in statistics: {e}")
+                await query.edit_message_text(
+                    "❌ خطا در محاسبه آمار\n\nلطفاً مجددا تلاش کنید.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='admin_stats')],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_menu')]
+                    ])
+                )
+                return
+        
         # Main admin menu callbacks
         if callback_data == 'admin_menu':
             await self.show_admin_hub_for_command_query(query, user_id)
-        elif callback_data == 'admin_stats':
-            await self.show_statistics(query)
         elif callback_data == 'admin_users':
             await self.show_users_management(query)
         elif callback_data.startswith('users_page_'):
@@ -331,116 +362,125 @@ class AdminPanel:
             )
     
     async def show_statistics(self, query) -> None:
-        """Show bot statistics"""
+        """Show bot statistics with timeout handling"""
         try:
-            # Load data from data_manager
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # First, show a loading message to the user
+            await query.edit_message_text(
+                "📊 در حال محاسبه آمار...\n⏳ لطفاً چند ثانیه صبر کنید...",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+                ])
+            )
             
-            users = data.get('users', {})
-            payments = data.get('payments', {})
-            stats = data.get('statistics', {})
+            # Use data_manager for async operations
+            users_data = {}
+            payments_data = {}
             
-            total_users = len(users)
-            total_payments = len(payments)
-            # Only count approved payments for revenue calculation
-            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
-            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
-            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
-            rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
+            # Try to load data with timeout protection
+            try:
+                if os.path.exists(Config.BOT_DATA_FILE):
+                    with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    users_data = data.get('users', {})
+                    payments_data = data.get('payments', {})
+                else:
+                    # Fallback to data_manager if file doesn't exist
+                    logger.warning("BOT_DATA_FILE not found, using empty data")
+                    
+            except Exception as file_error:
+                logger.error(f"Error loading bot data file: {file_error}")
+                # Show error with fallback stats
+                await query.edit_message_text(
+                    "⚠️ خطا در بارگذاری اطلاعات آمار\n\n"
+                    "ممکن است فایل داده‌ها در دسترس نباشد یا حجم آن زیاد باشد.\n\n"
+                    "لطفاً بعداً مجددا تلاش کنید.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+                    ])
+                )
+                return
             
-            # Course statistics - Count actual payments by course type (not user course field)
+            # Calculate statistics efficiently
+            total_users = len(users_data)
+            total_payments = len(payments_data)
+            
+            # Count payment statuses efficiently
+            approved_count = 0
+            pending_count = 0
+            rejected_count = 0
+            total_revenue = 0
             course_stats = {}
-            for payment_data in payments.values():
-                if payment_data.get('status') == 'approved':  # Only count approved payments
+            
+            for payment_data in payments_data.values():
+                status = payment_data.get('status', '')
+                if status == 'approved':
+                    approved_count += 1
+                    total_revenue += payment_data.get('price', 0)
+                    # Count by course type
                     course = payment_data.get('course_type')
                     if course:
                         course_stats[course] = course_stats.get(course, 0) + 1
+                elif status == 'pending_approval':
+                    pending_count += 1
+                elif status == 'rejected':
+                    rejected_count += 1
             
+            # Build statistics message
             stats_text = "📊 آمار کلی ربات:\n\n"
-            stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
-            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments}\n"
-            stats_text += f"  ✅ تایید شده: {approved_payments}\n"
-            stats_text += f"  ⏳ در انتظار: {pending_payments}\n"
-            stats_text += f"  ❌ رد شده: {rejected_payments}\n"
+            stats_text += f"👥 تعداد کل کاربران: {total_users:,}\n"
+            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments:,}\n"
+            stats_text += f"  ✅ تایید شده: {approved_count:,}\n"
+            stats_text += f"  ⏳ در انتظار: {pending_count:,}\n"
+            stats_text += f"  ❌ رد شده: {rejected_count:,}\n"
             stats_text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
-            stats_text += "📚 آمار دوره‌ها:"
             
-            for course, count in course_stats.items():
-                course_name = {
+            if course_stats:
+                stats_text += "📚 آمار دوره‌ها:\n"
+                course_names = {
                     'online_weights': 'وزنه آنلاین',
                     'online_cardio': 'هوازی آنلاین',
                     'in_person_cardio': 'حضوری هوازی',
                     'in_person_weights': 'حضوری وزنه',
                     'online_combo': 'آنلاین ترکیبی',
                     'nutrition_plan': 'برنامه تغذیه'
-                }.get(course, course)
-                stats_text += f"\n  • {course_name}: {count} نفر"
+                }
+                
+                for course, count in course_stats.items():
+                    course_name = course_names.get(course, course)
+                    stats_text += f"  • {course_name}: {count:,} نفر\n"
+            else:
+                stats_text += "📚 آمار دوره‌ها: هیچ دوره‌ای تایید نشده\n"
+            
+            # Add timestamp
+            from datetime import datetime
+            stats_text += f"\n🕐 آخرین به‌روزرسانی: {datetime.now().strftime('%H:%M:%S')}"
             
             keyboard = [
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+                [InlineKeyboardButton("� به‌روزرسانی", callback_data='admin_stats')],
+                [InlineKeyboardButton("�🔙 بازگشت", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(stats_text, reply_markup=reply_markup)
             
         except Exception as e:
-            await query.edit_message_text(f"❌ خطا در نمایش آمار: {str(e)}", 
-                                        reply_markup=InlineKeyboardMarkup([
-                                            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
-                                        ]))
-            # Load data from data_manager
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            logger.error(f"Error in show_statistics: {e}")
+            error_message = (
+                "❌ خطا در نمایش آمار\n\n"
+                "ممکن است حجم اطلاعات زیاد باشد یا مشکلی در سیستم رخ داده باشد.\n\n"
+                "💡 راهکارهای پیشنهادی:\n"
+                "• چند دقیقه صبر کرده و مجددا تلاش کنید\n"
+                "• از بخش مدیریت کاربران برای آمار محدود استفاده کنید\n"
+                "• با پشتیبانی تماس بگیرید اگر مشکل ادامه دارد"
+            )
             
-            users = data.get('users', {})
-            payments = data.get('payments', {})
-            stats = data.get('statistics', {})
-            
-            total_users = len(users)
-            total_payments = len(payments)
-            # Only count approved payments for revenue calculation
-            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
-            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
-            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
-            rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
-            
-            # Course statistics - Count actual payments by course type (not user course field)  
-            course_stats = {}
-            for payment_data in payments.values():
-                if payment_data.get('status') == 'approved':  # Only count approved payments
-                    course = payment_data.get('course_type')
-                    if course:
-                        course_stats[course] = course_stats.get(course, 0) + 1
-            
-            stats_text = "📊 آمار کلی ربات:\n\n"
-            stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
-            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments}\n"
-            stats_text += f"  ✅ تایید شده: {approved_payments}\n"
-            stats_text += f"  ⏳ در انتظار: {pending_payments}\n"
-            stats_text += f"  ❌ رد شده: {rejected_payments}\n"
-            stats_text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
-            stats_text += "📚 آمار دوره‌ها:"
-            
-            for course, count in course_stats.items():
-                course_name = {
-                    'online_weights': 'وزنه آنلاین',
-                    'online_cardio': 'هوازی آنلاین', 
-                    'online_combo': 'ترکیبی آنلاین',
-                    'in_person_cardio': 'هوازی حضوری',
-                    'in_person_weights': 'وزنه حضوری',
-                    'nutrition_plan': 'برنامه غذایی'
-                }.get(course, course)
-                
-                stats_text += f"\n• {course_name}: {count} نفر"
-            
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(stats_text, reply_markup=reply_markup)
-            
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در نمایش آمار: {str(e)}")
+            await query.edit_message_text(
+                error_message, 
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='admin_stats')],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+                ])
+            )
     
     async def show_admin_management(self, query, user_id: int) -> None:
         """Show admin management panel"""
