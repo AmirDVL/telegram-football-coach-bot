@@ -3,9 +3,10 @@ import os
 from datetime import datetime
 from typing import Dict, Any
 import aiofiles
+from config import Config
 
 class DataManager:
-    def __init__(self, data_file='bot_data.json'):
+    def __init__(self, data_file=Config.BOT_DATA_FILE):
         self.data_file = data_file
         self.ensure_directories()
         self.ensure_data_file()
@@ -43,21 +44,21 @@ class DataManager:
                 }, f, ensure_ascii=False, indent=2)
         
         # Questionnaire data file  
-        if not os.path.exists('questionnaire_data.json'):
-            with open('questionnaire_data.json', 'w', encoding='utf-8') as f:
+        if not os.path.exists(Config.QUESTIONNAIRE_DATA_FILE):
+            with open(Config.QUESTIONNAIRE_DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump({}, f, ensure_ascii=False, indent=2)
                 
         # Admins file
-        if not os.path.exists('admins.json'):
-            with open('admins.json', 'w', encoding='utf-8') as f:
+        if not os.path.exists(Config.ADMINS_FILE):
+            with open(Config.ADMINS_FILE, 'w', encoding='utf-8') as f:
                 json.dump({
                     'admins': [],
                     'last_sync': datetime.now().isoformat()
                 }, f, ensure_ascii=False, indent=2)
         
         # Coupons file
-        if not os.path.exists('coupons.json'):
-            with open('coupons.json', 'w', encoding='utf-8') as f:
+        if not os.path.exists(Config.COUPONS_FILE):
+            with open(Config.COUPONS_FILE, 'w', encoding='utf-8') as f:
                 json.dump({}, f, ensure_ascii=False, indent=2)
     
     async def save_user_data(self, user_id: int, data: Dict[str, Any]):
