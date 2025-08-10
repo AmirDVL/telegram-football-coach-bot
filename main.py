@@ -1173,6 +1173,8 @@ class FootballCoachBot:
         query = update.callback_query
         await query.answer()
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         user_name = update.effective_user.first_name or "کاربر"
         
         # Clear all input states when navigating to main menu categories
@@ -1236,6 +1238,9 @@ class FootballCoachBot:
         """Handle detailed course information"""
         query = update.callback_query
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            await query.answer()
+            return
         
         # Clear all input states when navigating to course details (this includes navigation back from coupon panel)
         states_cleared = await admin_error_handler.clear_all_input_states(
@@ -1286,6 +1291,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         course_type = query.data.replace('coupon_', '')
         
         # Store course type for later use
@@ -2916,6 +2923,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         admin_name = update.effective_user.first_name or "Unknown Admin"
         
         # Log admin action attempt
@@ -3291,6 +3300,8 @@ class FootballCoachBot:
         await query.answer()
         
         admin_id = update.effective_user.id
+        if await self.check_cooldown(admin_id):
+            return
         admin_name = update.effective_user.first_name or "ادمین"
         
         # Check admin access
@@ -3537,6 +3548,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         answer = query.data.replace('q_answer_', '')
         
         # Submit the answer
@@ -3910,6 +3923,9 @@ class FootballCoachBot:
         """Start questionnaire directly from callback"""
         query = update.callback_query
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            await query.answer()
+            return
         
         # CRITICAL: Use get_user_status to check payments table, not user data
         user_data = await self.data_manager.get_user_data(user_id)
@@ -3961,6 +3977,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         user_data = await self.data_manager.get_user_data(user_id)
         user_data['user_id'] = user_id  # Ensure user_id is set
         user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
@@ -3975,6 +3993,8 @@ class FootballCoachBot:
             await query.answer()
 
             user_id = update.effective_user.id
+            if await self.check_cooldown(user_id):
+                return
             
             # COMPREHENSIVE STATE CLEARING - clear EVERYTHING except questionnaire
             states_cleared = await admin_error_handler.clear_all_input_states(
@@ -4059,6 +4079,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         
         # COMPREHENSIVE state clearing - clear ALL input states
         states_cleared = await admin_error_handler.clear_all_input_states(
@@ -4082,6 +4104,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         
         # COMPREHENSIVE state clearing - clear ALL input states
         states_cleared = await admin_error_handler.clear_all_input_states(
@@ -4586,7 +4610,10 @@ class FootballCoachBot:
     async def handle_edit_navigation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle navigation in edit mode (prev/next buttons)"""
         query = update.callback_query
+        await query.answer()
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         action = query.data  # 'edit_prev' or 'edit_next'
         
         try:
@@ -4621,6 +4648,9 @@ class FootballCoachBot:
         """Finish questionnaire editing and return to main menu"""
         query = update.callback_query
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            await query.answer()
+            return
         
         try:
             # Finish edit mode
@@ -4898,6 +4928,8 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
+        if await self.check_cooldown(user_id):
+            return
         course_code = query.data.replace('get_main_plan_', '')
         
         main_plan = await self.get_main_plan_for_user(str(user_id), course_code)
