@@ -17,8 +17,11 @@ from datetime import datetime
 import logging
 from csv_exporter import generate_csv
 
-# Setup logger for admin panel
-logger = logging.getLogger(__name__)
+# Setup specialized loggers for the admin panel
+admin_logger = logging.getLogger('admin_actions')
+error_logger = logging.getLogger('errors')
+user_logger = logging.getLogger('user_interactions')
+payment_logger = logging.getLogger('payment_processing')
 
 class AdminPanel:
     def __init__(self):
@@ -56,7 +59,7 @@ class AdminPanel:
                 await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
                 return
             
-            logger.info(f"Admin {user_id} triggered callback: {query.data}")
+            admin_logger.info(f"Admin {user_id} triggered callback: {query.data}")
             
             # Main callback routing with comprehensive error handling
             await self._route_admin_callback(query, context, user_id)
@@ -85,7 +88,7 @@ class AdminPanel:
         callback_data = query.data
         
         # Add debug logging for callback routing
-        logger.debug(f"Routing callback: {callback_data}")
+        admin_logger.debug(f"Routing callback: {callback_data}")
         
         # Special handling for potentially long-running operations
         if callback_data == 'admin_stats':
@@ -139,16 +142,16 @@ class AdminPanel:
             
         # New plan management callbacks - Person-centric approach
         elif callback_data.startswith('user_plans_'):
-            logger.info(f"🎯 ROUTING: user_plans_ -> {callback_data}")
+            admin_logger.info(f"🎯 ROUTING: user_plans_ -> {callback_data}")
             user_id = callback_data.split('_', 2)[2]
             await self.show_user_course_plans(query, user_id)
         elif callback_data.startswith('manage_user_course_'):
-            logger.info(f"🎯 ROUTING: manage_user_course_ -> {callback_data}")
+            admin_logger.info(f"🎯 ROUTING: manage_user_course_ -> {callback_data}")
             parts = callback_data.split('_', 3)
             user_id, course_code = parts[3].split('_', 1)
             await self.show_user_course_plan_management_enhanced(query, user_id, course_code)
         elif callback_data.startswith('confirm_delete_'):
-            logger.info(f"🎯 ROUTING: confirm_delete_ -> {callback_data}")
+            admin_logger.info(f"🎯 ROUTING: confirm_delete_ -> {callback_data}")
             # confirm_delete_USER_ID_COURSE_CODE_PLAN_ID
             parts = callback_data.replace('confirm_delete_', '').split('_')
             if len(parts) >= 4:
@@ -166,7 +169,7 @@ class AdminPanel:
             else:
                 await query.answer("❌ خطا در تجزیه دستور!")
         elif callback_data.startswith(('upload_user_plan_', 'send_user_plan_', 'view_user_plan_', 'delete_user_plan_', 'send_latest_plan_')):
-            logger.info(f"🎯 ROUTING: new plan management callback -> {callback_data}")
+            admin_logger.info(f"🎯 ROUTING: new plan management callback -> {callback_data}")
             await self.handle_new_plan_callback_routing(query, context)
         
         # Main plan assignment callbacks
@@ -203,7 +206,7 @@ class AdminPanel:
             
         # Legacy plan management callbacks (keeping for backward compatibility)
         elif callback_data.startswith(('plan_course_', 'upload_plan_', 'send_plan_', 'view_plans_', 'send_to_user_', 'send_to_all_', 'view_plan_')):
-            logger.info(f"Routing legacy plan management callback: {callback_data}")
+            admin_logger.info(f"Routing legacy plan management callback: {callback_data}")
             await self.handle_plan_callback_routing(query, context)
             
         # Export callbacks
@@ -264,7 +267,7 @@ class AdminPanel:
         
         else:
             # Unknown callback - log for debugging
-            logger.warning(f"Unknown admin callback: {callback_data}")
+            admin_logger.warning(f"Unknown admin callback: {callback_data}")
             await admin_error_handler.log_admin_action(
                 user_id, "unknown_callback", {"callback_data": callback_data}
             )
@@ -667,7 +670,7 @@ class AdminPanel:
             await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='MarkdownV2', disable_web_page_preview=True)
             
         except Exception as e:
-            logger.error(f"Error in show_users_management: {e}")
+            error_logger.error(f"Error in show_users_management: {e}", exc_info=True)
             await query.edit_message_text(
                 f"❌ خطا در نمایش کاربران:\n\n"
                 f"جزئیات: {str(e)}\n\n"
