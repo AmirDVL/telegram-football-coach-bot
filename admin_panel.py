@@ -5,7 +5,6 @@ from data_manager import DataManager
 from coupon_manager import CouponManager
 from config import Config
 from admin_error_handler import admin_error_handler
-from admin_debugger import admin_debugger
 import json
 import csv
 import io
@@ -48,11 +47,6 @@ class AdminPanel:
         try:
             await query.answer()
             
-            # Log callback attempt for debugging
-            await admin_debugger.log_callback_attempt(
-                update, query.data, user_id, success=True
-            )
-            
             # Log admin action
             await admin_error_handler.log_admin_action(
                 user_id, f"callback_query", {"callback_data": query.data}
@@ -68,11 +62,6 @@ class AdminPanel:
             await self._route_admin_callback(query, context, user_id)
             
         except Exception as e:
-            # Log the error with full context
-            await admin_debugger.log_callback_attempt(
-                update, query.data, user_id, success=False, error=str(e)
-            )
-            
             # Handle the error gracefully
             error_handled = await admin_error_handler.handle_admin_error(
                 update, context, e, f"callback_query:{query.data}", user_id
@@ -259,39 +248,6 @@ class AdminPanel:
                 ]])
             )
 
-    async def show_debug_panel(self, query, admin_id: int):
-        """Show admin debug panel"""
-        try:
-            # Generate debug report
-            debug_report = await admin_debugger.create_debug_report(admin_id)
-            error_summary = await admin_error_handler.get_error_summary(admin_id, limit=5)
-            file_status = await admin_debugger.get_file_system_status()
-            callback_test = await admin_debugger.test_callback_routing()
-            
-            keyboard = [
-                [InlineKeyboardButton("🔍 تست کال‌بک", callback_data='admin_debug_test')],
-                [InlineKeyboardButton("📊 گزارش کامل", callback_data='admin_debug_full')],
-                [InlineKeyboardButton("🗑️ پاک کردن لاگ‌ها", callback_data='admin_debug_clear')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
-            ]
-            
-            text = f"""🔍 پنل دیباگ ادمین
-            
-{error_summary}
-
-📁 وضعیت فایل‌ها:
-{file_status}
-
-🧪 تست کال‌بک:
-{callback_test[:500]}..."""
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(text, reply_markup=reply_markup)
-            
-        except Exception as e:
-            await admin_error_handler.handle_admin_error(
-                query, None, e, "show_debug_panel", admin_id
-            )
     
     async def handle_admin_user_mode(self, query, admin_id) -> None:
         """Allow admin to test user interface without losing admin privileges"""
