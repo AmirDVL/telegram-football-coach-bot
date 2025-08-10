@@ -5,7 +5,6 @@ from data_manager import DataManager
 from coupon_manager import CouponManager
 from config import Config
 from admin_error_handler import admin_error_handler
-from admin_debugger import admin_debugger
 import json
 import csv
 import io
@@ -16,6 +15,7 @@ import shutil
 import traceback
 from datetime import datetime
 import logging
+from csv_exporter import generate_csv
 
 # Setup logger for admin panel
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class AdminPanel:
     def __init__(self):
         # Use bot_data.json for AdminManager to match main.py admin sync
-        self.admin_manager = AdminManager(admins_file='bot_data.json')
+        self.admin_manager = AdminManager(admins_file=Config.BOT_DATA_FILE)
         self.data_manager = DataManager()
         self.coupon_manager = CouponManager()
         self.admin_creating_coupons = set()  # Track which admins are creating coupons
@@ -47,11 +47,6 @@ class AdminPanel:
         try:
             await query.answer()
             
-            # Log callback attempt for debugging
-            await admin_debugger.log_callback_attempt(
-                update, query.data, user_id, success=True
-            )
-            
             # Log admin action
             await admin_error_handler.log_admin_action(
                 user_id, f"callback_query", {"callback_data": query.data}
@@ -67,11 +62,6 @@ class AdminPanel:
             await self._route_admin_callback(query, context, user_id)
             
         except Exception as e:
-            # Log the error with full context
-            await admin_debugger.log_callback_attempt(
-                update, query.data, user_id, success=False, error=str(e)
-            )
-            
             # Handle the error gracefully
             error_handled = await admin_error_handler.handle_admin_error(
                 update, context, e, f"callback_query:{query.data}", user_id
@@ -258,39 +248,6 @@ class AdminPanel:
                 ]])
             )
 
-    async def show_debug_panel(self, query, admin_id: int):
-        """Show admin debug panel"""
-        try:
-            # Generate debug report
-            debug_report = await admin_debugger.create_debug_report(admin_id)
-            error_summary = await admin_error_handler.get_error_summary(admin_id, limit=5)
-            file_status = await admin_debugger.get_file_system_status()
-            callback_test = await admin_debugger.test_callback_routing()
-            
-            keyboard = [
-                [InlineKeyboardButton("🔍 تست کال‌بک", callback_data='admin_debug_test')],
-                [InlineKeyboardButton("📊 گزارش کامل", callback_data='admin_debug_full')],
-                [InlineKeyboardButton("🗑️ پاک کردن لاگ‌ها", callback_data='admin_debug_clear')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
-            ]
-            
-            text = f"""🔍 پنل دیباگ ادمین
-            
-{error_summary}
-
-📁 وضعیت فایل‌ها:
-{file_status}
-
-🧪 تست کال‌بک:
-{callback_test[:500]}..."""
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(text, reply_markup=reply_markup)
-            
-        except Exception as e:
-            await admin_error_handler.handle_admin_error(
-                query, None, e, "show_debug_panel", admin_id
-            )
     
     async def handle_admin_user_mode(self, query, admin_id) -> None:
         """Allow admin to test user interface without losing admin privileges"""
@@ -377,7 +334,7 @@ class AdminPanel:
         """Show bot statistics"""
         try:
             # Load data from data_manager
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             users = data.get('users', {})
@@ -599,7 +556,7 @@ class AdminPanel:
     async def show_users_management(self, query, page: int = 0) -> None:
         """Show users management with pagination and safe formatting"""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             users = data.get('users', {})
@@ -681,7 +638,7 @@ class AdminPanel:
     async def show_payments_management(self, query) -> None:
         """Show payments management"""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             payments = data.get('payments', {})
@@ -1063,7 +1020,7 @@ class AdminPanel:
     async def show_pending_payments(self, query) -> None:
         """Show pending payments for quick admin access"""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             payments = data.get('payments', {})
@@ -1116,14 +1073,14 @@ class AdminPanel:
         await query.edit_message_text(text, reply_markup=reply_markup)
 
     async def export_users_csv(self, query) -> None:
-        """Export users data to CSV format"""
+        """Export users data to CSV format using the new exporter."""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            users = data.get('users', {})
+            users_data = list(data.get('users', {}).values())
             
-            if not users:
+            if not users_data:
                 await query.edit_message_text(
                     "📭 هیچ کاربری برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
@@ -1132,42 +1089,35 @@ class AdminPanel:
                 )
                 return
             
-            # Create CSV content
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # CSV Headers
             headers = [
                 'user_id', 'name', 'username', 'course_selected', 'payment_status',
                 'questionnaire_completed', 'registration_date', 'last_interaction'
             ]
-            writer.writerow(headers)
             
-            # Write user data
-            for user_id, user_data in users.items():
-                row = [
-                    user_id,
-                    user_data.get('name', ''),
-                    user_data.get('username', ''),
-                    user_data.get('course_selected', ''),
-                    user_data.get('payment_status', ''),
-                    user_data.get('questionnaire_completed', False),
-                    user_data.get('last_updated', ''),
-                    user_data.get('last_interaction', '')
-                ]
-                writer.writerow(row)
+            # Prepare data for CSV
+            export_data = []
+            for user in users_data:
+                export_data.append({
+                    'user_id': user.get('user_id'),
+                    'name': user.get('name', ''),
+                    'username': user.get('username', ''),
+                    'course_selected': user.get('course_selected', ''),
+                    'payment_status': user.get('payment_status', ''),
+                    'questionnaire_completed': user.get('questionnaire_completed', False),
+                    'registration_date': user.get('last_updated', ''),
+                    'last_interaction': user.get('last_interaction', '')
+                })
+
+            csv_file = generate_csv(export_data, headers)
             
-            csv_content = output.getvalue()
-            
-            # Send CSV file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"users_export_{timestamp}.csv"
             
             await query.message.reply_document(
-                document=io.BytesIO(csv_content.encode('utf-8')),
+                document=csv_file,
                 filename=filename,
                 caption=f"📤 صادرات کاربران\n\n"
-                       f"📊 تعداد: {len(users)} کاربر\n"
+                       f"📊 تعداد: {len(users_data)} کاربر\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
@@ -1179,14 +1129,14 @@ class AdminPanel:
             await query.edit_message_text(f"❌ خطا در صادرات کاربران: {str(e)}")
 
     async def export_payments_csv(self, query) -> None:
-        """Export payments data to CSV format"""
+        """Export payments data to CSV format using the new exporter."""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            payments = data.get('payments', {})
+            payments_data = list(data.get('payments', {}).values())
             
-            if not payments:
+            if not payments_data:
                 await query.edit_message_text(
                     "📭 هیچ پرداختی برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
@@ -1195,42 +1145,21 @@ class AdminPanel:
                 )
                 return
             
-            # Create CSV content
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # CSV Headers
             headers = [
                 'payment_id', 'user_id', 'course_type', 'price', 'status',
                 'payment_date', 'approval_date', 'rejection_reason'
             ]
-            writer.writerow(headers)
             
-            # Write payment data
-            for payment_id, payment_data in payments.items():
-                row = [
-                    payment_id,
-                    payment_data.get('user_id', ''),
-                    payment_data.get('course_type', ''),
-                    payment_data.get('price', ''),
-                    payment_data.get('status', ''),
-                    payment_data.get('timestamp', ''),
-                    payment_data.get('approval_date', ''),
-                    payment_data.get('rejection_reason', '')
-                ]
-                writer.writerow(row)
+            csv_file = generate_csv(payments_data, headers)
             
-            csv_content = output.getvalue()
-            
-            # Send CSV file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"payments_export_{timestamp}.csv"
             
             await query.message.reply_document(
-                document=io.BytesIO(csv_content.encode('utf-8')),
+                document=csv_file,
                 filename=filename,
                 caption=f"📤 صادرات پرداخت‌ها\n\n"
-                       f"📊 تعداد: {len(payments)} پرداخت\n"
+                       f"📊 تعداد: {len(payments_data)} پرداخت\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
@@ -1242,123 +1171,99 @@ class AdminPanel:
             await query.edit_message_text(f"❌ خطا در صادرات پرداخت‌ها: {str(e)}")
 
     async def export_questionnaire_csv(self, query) -> None:
-        """Export questionnaire data including photos to CSV format"""
+        """Export questionnaire data to a more detailed and robust CSV format."""
         try:
-            # Load questionnaire data
-            questionnaire_file = 'questionnaire_data.json'
+            questionnaire_file = Config.QUESTIONNAIRE_DATA_FILE
             if not os.path.exists(questionnaire_file):
                 await query.edit_message_text(
                     "📭 هیچ داده پرسشنامه‌ای برای صادرات وجود ندارد!",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
-                    ])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]])
                 )
                 return
-            
+
             with open(questionnaire_file, 'r', encoding='utf-8') as f:
                 questionnaire_data = json.load(f)
-            
-            # Filter out non-user data (responses, photos, completed are not user IDs)
-            # Only process entries that look like user IDs (numeric strings)
-            user_questionnaires = {}
-            for key, value in questionnaire_data.items():
-                if key.isdigit() and isinstance(value, dict):
-                    user_questionnaires[key] = value
-            
+
+            user_questionnaires = {k: v for k, v in questionnaire_data.items() if k.isdigit() and isinstance(v, dict)}
+
             if not user_questionnaires:
                 await query.edit_message_text(
                     "📭 هیچ پرسشنامه‌ای تکمیل نشده است!",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
-                    ])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]])
                 )
                 return
-            
-            # Create CSV content
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # CSV Headers
+
             headers = [
-                'user_id', 'نام_فامیل', 'سن', 'قد', 'وزن', 'تجربه_لیگ', 'وقت_تمرین',
-                'هدف_مسابقات', 'وضعیت_تیم', 'تمرین_اخیر', 'جزئیات_هوازی', 'جزئیات_وزنه',
-                'تجهیزات', 'اولویت_اصلی', 'مصدومیت', 'تغذیه_خواب', 'نوع_تمرین', 'چالش‌ها',
-                'تعداد_عکس', 'شناسه‌های_عکس', 'بهبود_بدنی', 'شبکه‌های_اجتماعی', 'شماره_تماس',
-                'تاریخ_شروع', 'تاریخ_تکمیل', 'وضعیت_تکمیل'
+                'user_id', 'completion_status', 'start_date', 'completion_date',
+                'q1_full_name', 'q2_age', 'q3_height', 'q4_weight', 'q5_league_experience',
+                'q6_training_time', 'q7_competition_goal', 'q8_team_status', 'q9_recent_training',
+                'q10_cardio_details', 'q11_weights_details', 'q12_equipment', 'q13_main_priority',
+                'q14_injury_history', 'q15_nutrition_sleep', 'q16_training_type', 'q17_challenges',
+                'q18_photo_count', 'q18_photo_ids', 'q19_body_improvement', 'q20_social_media',
+                'q21_phone_number', 'document_count', 'document_info'
             ]
-            writer.writerow(headers)
-            
-            # Write questionnaire data
+
+            export_data = []
             for user_id, user_progress in user_questionnaires.items():
                 answers = user_progress.get('answers', {})
                 photos = answers.get('photos', {})
+                documents = answers.get('documents', {})
+
+                photo_count = sum(len(p) for p in photos.values() if isinstance(p, list))
+                photo_ids = '|'.join([p['file_id'] for step_photos in photos.values() if isinstance(step_photos, list) for p in step_photos if isinstance(p, dict) and 'file_id' in p])
                 
-                # Count photos and create file_id list
-                photo_count = 0
-                photo_file_ids = []
-                for step_photos in photos.values():
-                    if isinstance(step_photos, list):
-                        photo_count += len(step_photos)
-                        # Extract file_ids from the photo objects
-                        for photo in step_photos:
-                            if isinstance(photo, dict) and 'file_id' in photo:
-                                photo_file_ids.append(photo['file_id'])
-                            elif isinstance(photo, str):
-                                photo_file_ids.append(photo)  # Legacy format
-                
-                row = [
-                    user_id,
-                    answers.get('1', ''),  # نام فامیل
-                    answers.get('2', ''),  # سن
-                    answers.get('3', ''),  # قد
-                    answers.get('4', ''),  # وزن
-                    answers.get('5', ''),  # تجربه لیگ
-                    answers.get('6', ''),  # وقت تمرین
-                    answers.get('7', ''),  # هدف مسابقات
-                    answers.get('8', ''),  # وضعیت تیم
-                    answers.get('9', ''),  # تمرین اخیر
-                    answers.get('10', ''), # جزئیات هوازی
-                    answers.get('11', ''), # جزئیات وزنه
-                    answers.get('12', ''), # تجهیزات
-                    answers.get('13', ''), # اولویت اصلی
-                    answers.get('14', ''), # مصدومیت
-                    answers.get('15', ''), # تغذیه خواب
-                    answers.get('16', ''), # نوع تمرین
-                    answers.get('17', ''), # چالش‌ها
-                    photo_count,           # تعداد عکس
-                    '|'.join(photo_file_ids), # شناسه‌های عکس (جدا شده با |)
-                    answers.get('19', ''), # بهبود بدنی
-                    answers.get('20', ''), # شبکه‌های اجتماعی
-                    answers.get('21', ''), # شماره تماس
-                    user_progress.get('started_at', ''),
-                    user_progress.get('completed_at', ''),
-                    'تکمیل شده' if user_progress.get('completed', False) else 'در حال انجام'
-                ]
-                writer.writerow(row)
-            
-            csv_content = output.getvalue()
-            
-            # Send CSV file with BOM for proper Persian text display in Excel
+                doc_count = len(documents)
+                doc_info = '|'.join([f"{step}:{doc.get('name', 'N/A')};{doc.get('file_id', 'N/A')}" for step, doc in documents.items()])
+
+                row = {
+                    'user_id': user_id,
+                    'completion_status': 'Completed' if user_progress.get('completed') else 'In Progress',
+                    'start_date': user_progress.get('started_at', ''),
+                    'completion_date': user_progress.get('completed_at', ''),
+                    'q1_full_name': answers.get('1', ''),
+                    'q2_age': answers.get('2', ''),
+                    'q3_height': answers.get('3', ''),
+                    'q4_weight': answers.get('4', ''),
+                    'q5_league_experience': answers.get('5', ''),
+                    'q6_training_time': answers.get('6', ''),
+                    'q7_competition_goal': answers.get('7', ''),
+                    'q8_team_status': answers.get('8', ''),
+                    'q9_recent_training': answers.get('9', ''),
+                    'q10_cardio_details': answers.get('10', ''),
+                    'q11_weights_details': answers.get('11', ''),
+                    'q12_equipment': answers.get('12', ''),
+                    'q13_main_priority': answers.get('13', ''),
+                    'q14_injury_history': answers.get('14', ''),
+                    'q15_nutrition_sleep': answers.get('15', ''),
+                    'q16_training_type': answers.get('16', ''),
+                    'q17_challenges': answers.get('17', ''),
+                    'q18_photo_count': photo_count,
+                    'q18_photo_ids': photo_ids,
+                    'q19_body_improvement': answers.get('19', ''),
+                    'q20_social_media': answers.get('20', ''),
+                    'q21_phone_number': answers.get('21', ''),
+                    'document_count': doc_count,
+                    'document_info': doc_info
+                }
+                export_data.append(row)
+
+            csv_file = generate_csv(export_data, headers)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"questionnaire_export_{timestamp}.csv"
-            
-            # Add BOM (Byte Order Mark) for UTF-8 to ensure proper display in Excel
-            csv_bytes = '\ufeff'.encode('utf-8') + csv_content.encode('utf-8')
-            
+
             await query.message.reply_document(
-                document=io.BytesIO(csv_bytes),
+                document=csv_file,
                 filename=filename,
                 caption=f"📤 صادرات پرسشنامه‌ها\n\n"
                        f"📊 تعداد: {len(user_questionnaires)} پرسشنامه\n"
-                       f"📷 شامل اطلاعات عکس‌ها\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}\n"
                        f"💡 برای نمایش صحیح فارسی، با Excel باز کنید"
             )
-            
+
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("✅ فایل CSV پرسشنامه‌ها ارسال شد!", reply_markup=reply_markup)
-            
+
         except Exception as e:
             await admin_error_handler.handle_admin_error(
                 update=query,
@@ -1373,7 +1278,7 @@ class AdminPanel:
         """Show list of users who completed questionnaire for personal export"""
         try:
             # Load questionnaire data
-            questionnaire_file = 'questionnaire_data.json'
+            questionnaire_file = Config.QUESTIONNAIRE_DATA_FILE
             if not os.path.exists(questionnaire_file):
                 await query.edit_message_text(
                     "📭 هیچ کاربری پرسشنامه تکمیل نکرده است!",
@@ -1387,7 +1292,7 @@ class AdminPanel:
                 questionnaire_data = json.load(f)
             
             # Load user data to get names
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 bot_data = json.load(f)
             
             users = bot_data.get('users', {})
@@ -1501,10 +1406,10 @@ class AdminPanel:
         """Export all data for a specific user including questionnaire photos and documents"""
         try:
             # Load all data
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 bot_data = json.load(f)
             
-            questionnaire_file = 'questionnaire_data.json'
+            questionnaire_file = Config.QUESTIONNAIRE_DATA_FILE
             questionnaire_data = {}
             if os.path.exists(questionnaire_file):
                 with open(questionnaire_file, 'r', encoding='utf-8') as f:
@@ -1951,13 +1856,13 @@ class AdminPanel:
     async def export_all_data(self, query) -> None:
         """Export complete database as JSON with admin-friendly format"""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             # Load questionnaire data if exists
             questionnaire_data = {}
             try:
-                with open('questionnaire_data.json', 'r', encoding='utf-8') as f:
+                with open(Config.QUESTIONNAIRE_DATA_FILE, 'r', encoding='utf-8') as f:
                     questionnaire_data = json.load(f)
             except FileNotFoundError:
                 pass
@@ -2043,15 +1948,65 @@ class AdminPanel:
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در صادرات کامل: {str(e)}")
 
-    async def export_telegram_csv(self, query) -> None:
-        """Export Telegram contact information to CSV format"""
+    async def generate_users_template(self, query) -> None:
+        """Generate a CSV template for users."""
         try:
-            with open('bot_data.json', 'r', encoding='utf-8') as f:
+            headers = [
+                'user_id', 'name', 'username', 'course_selected', 'payment_status',
+                'questionnaire_completed', 'registration_date', 'last_interaction'
+            ]
+            csv_file = generate_csv([], headers)
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"users_template_{timestamp}.csv"
+
+            await query.message.reply_document(
+                document=csv_file,
+                filename=filename,
+                caption="📋 نمونه فایل CSV برای کاربران"
+            )
+
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل نمونه کاربران ارسال شد!", reply_markup=reply_markup)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در ایجاد نمونه کاربران: {str(e)}")
+
+    async def generate_payments_template(self, query) -> None:
+        """Generate a CSV template for payments."""
+        try:
+            headers = [
+                'payment_id', 'user_id', 'course_type', 'price', 'status',
+                'payment_date', 'approval_date', 'rejection_reason'
+            ]
+            csv_file = generate_csv([], headers)
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"payments_template_{timestamp}.csv"
+
+            await query.message.reply_document(
+                document=csv_file,
+                filename=filename,
+                caption="📋 نمونه فایل CSV برای پرداخت‌ها"
+            )
+
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("✅ فایل نمونه پرداخت‌ها ارسال شد!", reply_markup=reply_markup)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در ایجاد نمونه پرداخت‌ها: {str(e)}")
+
+    async def export_telegram_csv(self, query) -> None:
+        """Export Telegram contact information to CSV format using the new exporter."""
+        try:
+            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            users = data.get('users', {})
+            users_data = list(data.get('users', {}).values())
             
-            if not users:
+            if not users_data:
                 await query.edit_message_text(
                     "📭 هیچ کاربری برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
@@ -2060,45 +2015,36 @@ class AdminPanel:
                 )
                 return
             
-            # Create CSV content
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # CSV Headers for telegram data
             headers = [
                 'user_id', 'name', 'username', 'phone', 'telegram_link',
                 'course_selected', 'payment_status', 'registration_date'
             ]
-            writer.writerow(headers)
             
-            # Write telegram contact data
-            for user_id, user_data in users.items():
-                username = user_data.get('username', '')
-                telegram_link = f"https://t.me/{username}" if username else ''
-                
-                row = [
-                    user_id,
-                    user_data.get('name', ''),
-                    f"@{username}" if username else '',
-                    user_data.get('phone', ''),
-                    telegram_link,
-                    user_data.get('course_selected', ''),
-                    user_data.get('payment_status', ''),
-                    user_data.get('last_updated', '')
-                ]
-                writer.writerow(row)
+            # Prepare data for CSV
+            export_data = []
+            for user in users_data:
+                username = user.get('username', '')
+                export_data.append({
+                    'user_id': user.get('user_id'),
+                    'name': user.get('name', ''),
+                    'username': f"@{username}" if username else '',
+                    'phone': user.get('phone', ''),
+                    'telegram_link': f"https://t.me/{username}" if username else '',
+                    'course_selected': user.get('course_selected', ''),
+                    'payment_status': user.get('payment_status', ''),
+                    'registration_date': user.get('last_updated', '')
+                })
             
-            csv_content = output.getvalue()
+            csv_file = generate_csv(export_data, headers)
             
-            # Send CSV file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"telegram_contacts_{timestamp}.csv"
             
             await query.message.reply_document(
-                document=io.BytesIO(csv_content.encode('utf-8')),
+                document=csv_file,
                 filename=filename,
                 caption=f"📤 صادرات مخاطبین تلگرام\n\n"
-                       f"👥 تعداد: {len(users)} مخاطب\n"
+                       f"👥 تعداد: {len(users_data)} مخاطب\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
