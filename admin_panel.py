@@ -471,8 +471,8 @@ class AdminPanel:
             stats_text += f"\n🕐 آخرین به‌روزرسانی: {datetime.now().strftime('%H:%M:%S')}"
             
             keyboard = [
-                [InlineKeyboardButton("� به‌روزرسانی", callback_data='admin_stats')],
-                [InlineKeyboardButton("�🔙 بازگشت", callback_data='admin_back_main')]
+                [InlineKeyboardButton("🔄 بروزرسانی", callback_data='admin_stats')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -2614,7 +2614,7 @@ class AdminPanel:
                     # Streamlined UI: only send and delete buttons (view is redundant)
                     plan_id = plan.get('id', f'plan_{i}')
                     keyboard.append([
-                        InlineKeyboardButton(f"� ارسال برنامه {i} به کاربر", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}'),
+                        InlineKeyboardButton(f" ارسال برنامه {i} به کاربر", callback_data=f'send_user_plan_{user_id}_{course_code}_{plan_id}'),
                         InlineKeyboardButton(f"🗑 حذف برنامه {i}", callback_data=f'delete_user_plan_{user_id}_{course_code}_{plan_id}')
                     ])
                     text += "\n"
@@ -3157,7 +3157,7 @@ class AdminPanel:
                     await query.edit_message_text(
                         f"✅ برنامه '{plan_title}' با موفقیت برای {user_name} ارسال شد!",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("� بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                            [InlineKeyboardButton(" بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
                         ])
                     )
                     
