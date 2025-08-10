@@ -18,6 +18,7 @@ from questionnaire_manager import QuestionnaireManager
 from image_processor import ImageProcessor
 from coupon_manager import CouponManager
 from admin_error_handler import admin_error_handler
+from input_validator import sanitize_text
 
 # Enhanced logging configuration
 def setup_enhanced_logging():
@@ -1346,8 +1347,9 @@ class FootballCoachBot:
             )
             return
         
-        # Validate coupon
-        is_valid, message, discount_percent = self.coupon_manager.validate_coupon(coupon_code.strip().upper())
+        # SANITIZE and validate coupon
+        sanitized_code = sanitize_text(coupon_code).strip().upper()
+        is_valid, message, discount_percent = self.coupon_manager.validate_coupon(sanitized_code)
         
         if not is_valid:
             # Show error and offer to continue without coupon
@@ -1370,11 +1372,11 @@ class FootballCoachBot:
         
         # Calculate discounted price
         original_price = Config.PRICES.get(course_type, 0)
-        final_price, discount_amount = self.coupon_manager.calculate_discounted_price(original_price, coupon_code.strip().upper())
+        final_price, discount_amount = self.coupon_manager.calculate_discounted_price(original_price, sanitized_code)
         
         # Store coupon for this user
         self.user_coupon_codes[user_id] = {
-            'code': coupon_code.strip().upper(),
+            'code': sanitized_code,
             'discount_percent': discount_percent,
             'discount_amount': discount_amount,
             'course_type': course_type
@@ -1433,8 +1435,9 @@ class FootballCoachBot:
         target_user_id = admin_context.get('plan_user_id')  # For user-specific plans
         
         if upload_step == 'title':
+            sanitized_text = sanitize_text(text)
             # Store the title and ask for file
-            context.user_data[user_id]['plan_title'] = text
+            context.user_data[user_id]['plan_title'] = sanitized_text
             context.user_data[user_id]['plan_upload_step'] = 'file'
             
             course_names = {
@@ -1460,7 +1463,7 @@ class FootballCoachBot:
                     pass
             
             await update.message.reply_text(
-                f"✅ عنوان برنامه ثبت شد: {text}{user_info}\n\n"
+                f"✅ عنوان برنامه ثبت شد: {sanitized_text}{user_info}\n\n"
                 f"📁 حال لطفاً فایل برنامه {course_name} را ارسال کنید:\n\n"
                 f"📋 فرمت‌های قابل قبول:\n"
                 f"• فایل PDF\n"
@@ -1470,21 +1473,23 @@ class FootballCoachBot:
             )
             
         elif upload_step == 'description':
+            sanitized_text = sanitize_text(text)
             # Store the description and complete upload
-            context.user_data[user_id]['plan_description'] = text
+            context.user_data[user_id]['plan_description'] = sanitized_text
             
             # Log description received
             await admin_error_handler.log_plan_upload_workflow(
                 admin_id=user_id, 
                 step='description_received',
-                plan_data={'description': text[:50] + '...' if len(text) > 50 else text}
+                plan_data={'description': sanitized_text[:50] + '...' if len(sanitized_text) > 50 else sanitized_text}
             )
             
             await self.complete_plan_upload(update, context)
             
         elif upload_step == 'file' and text:
+            sanitized_text = sanitize_text(text)
             # Handle direct text input as plan content
-            context.user_data[user_id]['plan_content'] = text
+            context.user_data[user_id]['plan_content'] = sanitized_text
             context.user_data[user_id]['plan_content_type'] = 'text'
             context.user_data[user_id]['plan_upload_step'] = 'description'
             
@@ -1492,7 +1497,7 @@ class FootballCoachBot:
             await admin_error_handler.log_plan_upload_workflow(
                 admin_id=user_id, 
                 step='text_content_received',
-                plan_data={'content_type': 'text', 'content_length': len(text)}
+                plan_data={'content_type': 'text', 'content_length': len(sanitized_text)}
             )
             
             keyboard = [[InlineKeyboardButton("⏩ رد کردن توضیحات", callback_data='skip_plan_description')]]
@@ -3820,14 +3825,16 @@ class FootballCoachBot:
         # Process questionnaire answer - reuse existing logic
         current_step = current_question.get('step', 1)
         
-        # Validate and submit the answer
-        is_valid, error_msg = self.questionnaire_manager.validate_answer(current_step, text_input)
+        # SANITIZE and validate the answer
+        sanitized_input = sanitize_text(text_input)
+
+        is_valid, error_msg = self.questionnaire_manager.validate_answer(current_step, sanitized_input)
         if not is_valid:
             await update.message.reply_text(f"❌ {error_msg}")
             return
         
-        # Submit the answer
-        result = await self.questionnaire_manager.process_answer(user_id, text_input)
+        # Submit the SANITIZED answer
+        result = await self.questionnaire_manager.process_answer(user_id, sanitized_input)
         
         if result["status"] == "error":
             await update.message.reply_text(f"❌ {result['message']}")
@@ -3860,7 +3867,8 @@ class FootballCoachBot:
     async def _handle_edit_mode_text_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text_input: str) -> None:
         """Handle text input during questionnaire edit mode"""
         user_id = update.effective_user.id
-        await self.questionnaire_manager.update_answer_in_edit_mode(update, context, user_id, text_input)
+        sanitized_input = sanitize_text(text_input)
+        await self.questionnaire_manager.update_answer_in_edit_mode(update, context, user_id, sanitized_input)
 
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """

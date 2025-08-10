@@ -168,3 +168,31 @@ class InputValidator:
 
 # Create global instance
 input_validator = InputValidator()
+
+def sanitize_text(text: str, max_length: int = 512) -> str:
+    """Sanitize text input by stripping whitespace, removing HTML, and limiting length"""
+    if not text:
+        return ""
+
+    # First strip HTML
+    text_no_html = strip_html(text)
+
+    # Replace newlines and tabs with spaces
+    text_no_html = text_no_html.replace('\n', ' ').replace('\t', ' ')
+
+    # Collapse multiple spaces into one
+    import re
+    text_no_html = re.sub(r'\s+', ' ', text_no_html)
+
+    return text_no_html.strip()[:max_length]
+
+def strip_html(text: str) -> str:
+    """Remove HTML tags from text and collapse whitespace"""
+    import re
+    if not text:
+        return ""
+    # Replace HTML tags with a single space
+    text_no_html = re.sub(r'<[^>]+>', ' ', text)
+    # Collapse multiple whitespace characters into a single space
+    text_collapsed = re.sub(r'\s+', ' ', text_no_html)
+    return text_collapsed.strip()
