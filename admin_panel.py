@@ -22,6 +22,7 @@ admin_logger = logging.getLogger('admin_actions')
 error_logger = logging.getLogger('errors')
 user_logger = logging.getLogger('user_interactions')
 payment_logger = logging.getLogger('payment_processing')
+logger = logging.getLogger(__name__)  # Main logger for general use
 
 class AdminPanel:
     def __init__(self):
@@ -33,10 +34,14 @@ class AdminPanel:
     
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Redirect to unified admin hub - no separate menu"""
+        if not update.effective_user:
+            return
+            
         user_id = update.effective_user.id
         
         if not await self.admin_manager.is_admin(user_id):
-            await update.message.reply_text("❌ شما دسترسی ادمین ندارید.")
+            if update.message:
+                await update.message.reply_text("❌ شما دسترسی ادمین ندارید.")
             return
         
         # Show the unified admin hub directly
@@ -45,6 +50,9 @@ class AdminPanel:
     async def handle_admin_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle admin panel callbacks with comprehensive error handling"""
         query = update.callback_query
+        if not query or not update.effective_user:
+            return
+            
         user_id = update.effective_user.id
         
         try:
@@ -66,17 +74,19 @@ class AdminPanel:
             
         except Exception as e:
             # Handle the error gracefully
+            callback_data = query.data if query else "unknown"
             error_handled = await admin_error_handler.handle_admin_error(
-                update, context, e, f"callback_query:{query.data}", user_id
+                update, context, e, f"callback_query:{callback_data}", user_id
             )
             
             if not error_handled:
                 # If error handler couldn't handle it, send a basic error message
                 try:
-                    await query.edit_message_text(
-                        "❌ خطای غیرمنتظره رخ داد. لطفاً مجددا تلاش کنید.\n\n"
-                        "اگر مشکل ادامه دارد، دستور /admin را مجددا اجرا کنید."
-                    )
+                    if query:
+                        await query.edit_message_text(
+                            "❌ خطای غیرمنتظره رخ داد. لطفاً مجددا تلاش کنید.\n\n"
+                            "اگر مشکل ادامه دارد، دستور /admin را مجددا اجرا کنید."
+                        )
                 except Exception:
                     pass  # Even error handling failed
                 
@@ -251,9 +261,11 @@ class AdminPanel:
         elif callback_data == 'admin_cleanup_non_env':
             await self.handle_cleanup_non_env_admins(query, user_id)
         elif callback_data.startswith('admin_add_admin_'):
-            await self.handle_add_admin(query, user_id)
+            # Show admin management instead of missing handler
+            await self.show_admin_management(query, user_id)
         elif callback_data.startswith('admin_remove_admin_'):
-            await self.handle_remove_admin(query, user_id)
+            # Show admin management instead of missing handler
+            await self.show_admin_management(query, user_id)
         
         # Plan upload management
         elif callback_data == 'skip_plan_description':
@@ -554,26 +566,29 @@ class AdminPanel:
                         manual_admins.append(admin_info)
             else:
                 # List format
-                for admin in admins_data:
-                    admin_id = admin.get('user_id')
-                    admin_type = "🔥 سوپر ادمین" if admin.get('is_super_admin') else "👤 ادمین"
-                    admin_info = f"{admin_type}: {admin_id}"
-                    
-                    # Check if this is an environment admin
-                    is_env_admin = (
-                        admin.get('added_by') == 'env_sync' or 
-                        admin.get('env_admin') == True or
-                        admin.get('synced_from_config') == True or
-                        admin.get('force_synced') == True or
-                        admin_id in env_admin_ids
-                    )
-                    
-                    if is_env_admin:
-                        admin_info += " 🌍 (از فایل تنظیمات)"
-                        env_admins.append(admin_info)
-                    else:
-                        admin_info += " 🤝 (اضافه شده دستی)"
-                        manual_admins.append(admin_info)
+                if admins_data and hasattr(admins_data, '__iter__'):
+                    for admin in admins_data:
+                        admin_id = admin.get('user_id')
+                        admin_type = "🔥 سوپر ادمین" if admin.get('is_super_admin') else "👤 ادمین"
+                        admin_info = f"{admin_type}: {admin_id}"
+                        
+                        # Check if this is an environment admin
+                        is_env_admin = (
+                            admin.get('added_by') == 'env_sync' or 
+                            admin.get('env_admin') == True or
+                            admin.get('synced_from_config') == True or
+                            admin.get('force_synced') == True or
+                            admin_id in env_admin_ids
+                        )
+                        
+                        if is_env_admin:
+                            admin_info += " 🌍 (از فایل تنظیمات)"
+                            env_admins.append(admin_info)
+                        else:
+                            admin_info += " 🤝 (اضافه شده دستی)"
+                            manual_admins.append(admin_info)
+                else:
+                    manual_admins.append("هیچ ادمینی یافت نشد")
         
         for admin_info in env_admins:
             text += admin_info + "\n"
@@ -735,7 +750,7 @@ class AdminPanel:
     
     async def back_to_manage_admins(self, query, user_id: int) -> None:
         """Return to admin management menu"""
-        await self.show_admin_management(query)
+        await self.show_admin_management(query, user_id)
     
     async def back_to_stats_menu(self, query, user_id: int) -> None:
         """Return to statistics menu"""
@@ -794,6 +809,9 @@ class AdminPanel:
 
     async def show_admin_hub_for_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
         """Show the unified admin hub when called from command (/admin)"""
+        if not update.effective_user or not update.message:
+            return
+            
         is_super = await self.admin_manager.is_super_admin(user_id)
         can_manage_admins = await self.admin_manager.can_add_admins(user_id)
         user_name = update.effective_user.first_name or "ادمین"
@@ -848,6 +866,9 @@ class AdminPanel:
 
     async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /add_admin command"""
+        if not update.effective_user or not update.message:
+            return
+            
         user_id = update.effective_user.id
         
         if not await self.admin_manager.can_add_admins(user_id):
@@ -873,6 +894,9 @@ class AdminPanel:
     
     async def remove_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /remove_admin command"""
+        if not update.effective_user or not update.message:
+            return
+            
         user_id = update.effective_user.id
         
         if not await self.admin_manager.can_remove_admins(user_id):
@@ -929,7 +953,7 @@ class AdminPanel:
                 result_text += f"• حذف شده: {removed_count}\n"
                 result_text += f"• کل ادمین‌های بررسی شده: {total_checked}\n\n"
                 
-                if removal_details:
+                if removal_details and isinstance(removal_details, list):
                     result_text += "ادمین‌های حذف شده:\n"
                     for detail in removal_details[:10]:  # Show first 10
                         result_text += f"• {detail}\n"
@@ -949,9 +973,9 @@ class AdminPanel:
                 if isinstance(admins_data, dict):
                     # Convert from dict format {user_id: admin_data} to list format
                     admins_list = []
-                    for user_id, admin_data in admins_data.items():
+                    for user_id_str, admin_data in admins_data.items():
                         admin_info = admin_data.copy()
-                        admin_info['user_id'] = int(user_id)
+                        admin_info['user_id'] = int(user_id_str)
                         admins_list.append(admin_info)
                     admins_data = admins_list
                 
@@ -994,12 +1018,19 @@ class AdminPanel:
                     
                     await self.data_manager.save_data('admins', remaining_admins_dict)
                 else:
-                    # List format
-                    remaining_admins = [
+                    # List format - convert to dict format for saving
+                    remaining_admins_list = [
                         admin for admin in admins_data 
                         if admin not in non_env_admins
                     ]
-                    await self.data_manager.save_data('admins', remaining_admins)
+                    # Convert list to dict format
+                    remaining_admins_dict = {}
+                    for admin in remaining_admins_list:
+                        user_id = admin.get('user_id')
+                        if user_id:
+                            remaining_admins_dict[str(user_id)] = admin
+                    
+                    await self.data_manager.save_data('admins', remaining_admins_dict)
                 
                 removed_count = len(non_env_admins)
                 
@@ -1032,6 +1063,9 @@ class AdminPanel:
     
     async def get_id_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /id command to show user's ID"""
+        if not update.effective_user or not update.message:
+            return
+            
         user_id = update.effective_user.id
         username = update.effective_user.username
         first_name = update.effective_user.first_name
