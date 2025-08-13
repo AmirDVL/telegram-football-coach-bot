@@ -2345,15 +2345,31 @@ class FootballCoachBot:
             user_context.get('awaiting_payment_receipt')
         )
         
+        # DEBUG: Log payment flow state
+        payment_logger.debug(f"PHOTO ROUTER DEBUG - User {user_id}:")
+        payment_logger.debug(f"  - buying_additional_course: {user_context.get('buying_additional_course')}")
+        payment_logger.debug(f"  - in payment_pending: {user_id in self.payment_pending}")
+        payment_logger.debug(f"  - awaiting_payment_receipt: {user_context.get('awaiting_payment_receipt')}")
+        payment_logger.debug(f"  - actively_in_payment_flow: {actively_in_payment_flow}")
+        
         if actively_in_payment_flow:
             payment_logger.debug(f"PHOTO ROUTER - User {user_id} in payment flow")
             await self.handle_payment_receipt(update, context)
             return
         
-        # FALLBACK: Photo sent outside valid context - REMAIN SILENT
+        # FALLBACK: Photo sent outside valid context - PROVIDE DEBUG INFO
         # User requested complete silence when no input is expected (like in main menu)
-        user_logger.debug(f"PHOTO ROUTER - User {user_id} sent photo outside valid context - remaining silent")
-        # No message sent - complete silence as requested
+        user_logger.debug(f"PHOTO ROUTER - User {user_id} sent photo outside valid context")
+        
+        # DEBUG: For troubleshooting, let's show what we found
+        await update.message.reply_text(
+            f"🔍 DEBUG: تصویر در زمینه نامعتبر ارسال شد\n\n"
+            f"وضعیت فعلی:\n"
+            f"📊 در حال پرسشنامه: {in_questionnaire}\n"
+            f"💳 در جریان پرداخت: {actively_in_payment_flow}\n"
+            f"🎯 انتظار کوپن: {user_context.get('waiting_for_coupon', False)}\n\n"
+            f"برای شروع مجدد: /start"
+        )
 
     async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle ONLY payment receipt photos - called after photo router validation"""
@@ -2454,14 +2470,7 @@ class FootballCoachBot:
                 original_price = price
                 coupon_info = None
             
-            # Check minimum dimensions
-            if photo.width < 200 or photo.height < 200:
-                await update.message.reply_text(
-                    "❌ تصویر خیلی کوچک است!\n\n"
-                    "حداقل ابعاد مورد نیاز: ۲۰۰×۲۰۰ پیکسل\n"
-                    "لطفاً تصویر با کیفیت بهتر ارسال کنید."
-                )
-                return
+            # Note: Minimum dimension check removed for payment receipts to allow any size receipt images
             
             # Create payment record
             payment_id = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
