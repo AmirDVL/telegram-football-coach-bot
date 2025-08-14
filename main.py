@@ -1120,8 +1120,8 @@ class FootballCoachBot:
         purchased_courses = await self.get_user_purchased_courses(user_id)
         questionnaire_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
         
-        # Courses that require questionnaire completion
-        courses_requiring_questionnaire = {'in_person_cardio', 'in_person_weights', 'online_cardio', 'online_weights'}
+        # Courses that require questionnaire completion (ALL courses need questionnaire for personalization)
+        courses_requiring_questionnaire = {'in_person_cardio', 'in_person_weights', 'online_cardio', 'online_weights', 'nutrition_plan'}
         
         # Check if user has any courses that require questionnaire
         requires_questionnaire = bool(purchased_courses & courses_requiring_questionnaire)
@@ -3979,15 +3979,13 @@ class FootballCoachBot:
         user_data = await self.data_manager.get_user_data(user_id)
         user_status = await self.get_user_status(user_data)
         
-        # Check if user has approved payment for training courses
+        # Check if user has approved payment for any course (including nutrition plan)
         purchased_courses = await self.get_user_purchased_courses(user_id)
-        training_courses = purchased_courses - {'nutrition_plan'}  # Exclude nutrition plan
         
-        if user_status != 'payment_approved' or not training_courses:
+        if user_status != 'payment_approved' or not purchased_courses:
             await query.edit_message_text(
                 "❌ برای شروع پرسشنامه ابتدا باید پرداخت شما تایید شود.\n\n"
-                "لطفا ابتدا یک دوره تمرینی انتخاب کنید و پرداخت کنید.\n\n"
-                "💡 توجه: برنامه غذایی نیاز به پرسشنامه ندارد."
+                "لطفا ابتدا یک دوره انتخاب کنید و پرداخت کنید."
             )
             return
         
@@ -4304,29 +4302,15 @@ class FootballCoachBot:
         user_data = await self.data_manager.get_user_data(user_id)
         purchased_courses = await self.get_user_purchased_courses(user_id)
         
-        # Check if user has nutrition plan - they shouldn't access questionnaire
-        if 'nutrition_plan' in purchased_courses:
-            await query.edit_message_text(
-                "🥗 شما برنامه غذایی خریداری کرده‌اید!\n\n"
-                "برای دریافت برنامه غذایی شخصی‌سازی شده، به پشتیبانی @DrBohloul پیام دهید.\n\n"
-                "برنامه‌های غذایی نیاز به پرسشنامه ندارند.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                    [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
-                ])
-            )
-            return
-        
-        # Check if user has training courses with approved payment
-        training_courses = [course for course in purchased_courses if course != 'nutrition_plan']
+        # Check if user has any courses with approved payment (including nutrition plan)
         user_status = await self.get_user_status(user_data)
         
-        if not training_courses or user_status != 'payment_approved':
+        if not purchased_courses or user_status != 'payment_approved':
             await query.edit_message_text(
                 "❌ برای دسترسی به پرسشنامه، باید:\n\n"
-                "✅ یک دوره تمرینی خریداری کرده باشید\n"
+                "✅ یک دوره خریداری کرده باشید\n"
                 "✅ پرداخت شما تایید شده باشد\n\n"
-                "لطفاً ابتدا یک دوره تمرینی خرید کرده و پرداخت خود را تکمیل کنید.",
+                "لطفاً ابتدا یک دوره خرید کرده و پرداخت خود را تکمیل کنید.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🛒 خرید دوره", callback_data='new_course')],
                     [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
@@ -4475,18 +4459,18 @@ class FootballCoachBot:
         if status == 'payment_pending':
             keyboard.append([InlineKeyboardButton("🔄 بررسی مجدد پرداخت", callback_data='check_payment_status')])
         elif status == 'payment_approved':
-            # Check if user has nutrition plan - handle differently
-            has_nutrition_plan = 'nutrition_plan' in purchased_courses
-            
-            if has_nutrition_plan:
-                # Nutrition plans don't need questionnaire - go directly to program
-                keyboard.append([InlineKeyboardButton("📋 مشاهده برنامه غذایی", callback_data='view_program')])
+            # All courses (including nutrition plans) need questionnaire for personalization
+            q_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
+            if not q_status.get('completed'):
+                keyboard.append([InlineKeyboardButton(" ادامه پرسشنامه", callback_data='continue_questionnaire')])
             else:
-                # Regular courses need questionnaire
-                q_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
-                if not q_status.get('completed'):
-                    keyboard.append([InlineKeyboardButton("📝 ادامه پرسشنامه", callback_data='continue_questionnaire')])
+                # Show appropriate program view button based on what courses they have
+                has_nutrition_plan = 'nutrition_plan' in purchased_courses
+                if has_nutrition_plan and len(purchased_courses) == 1:
+                    # Only nutrition plan
+                    keyboard.append([InlineKeyboardButton(" مشاهده برنامه غذایی", callback_data='view_program')])
                 else:
+                    # Training courses or mixed courses
                     keyboard.append([InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')])
         elif status == 'payment_rejected':
             keyboard.append([InlineKeyboardButton("💳 پرداخت مجدد", callback_data=f'payment_{user_payments[0].get("course_type", "") if user_payments else ""}')])
