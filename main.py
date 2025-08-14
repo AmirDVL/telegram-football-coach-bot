@@ -135,6 +135,10 @@ def setup_enhanced_logging():
     payment_logger.addHandler(payment_handler)
     payment_logger.setLevel(logging.INFO)
     
+    error_logger = logging.getLogger('errors')
+    error_logger.addHandler(error_handler)
+    error_logger.setLevel(logging.ERROR)
+    
     # Log startup information
     logging.info("=" * 80)
     logging.info("🤖 Football Coach Bot Enhanced Logging System Initialized")
@@ -147,7 +151,8 @@ def setup_enhanced_logging():
         'main': logging.getLogger(__name__),
         'user': user_logger,
         'admin': admin_logger,
-        'payment': payment_logger
+        'payment': payment_logger,
+        'error': error_logger
     }
 
 # Initialize enhanced logging
@@ -156,6 +161,7 @@ logger = loggers['main']
 user_logger = loggers['user']
 admin_logger = loggers['admin']
 payment_logger = loggers['payment']
+error_logger = loggers['error']
 
 # Convenience functions for logging
 def log_user_action(user_id: int, username: str, action: str, details: str = ""):
@@ -2554,7 +2560,7 @@ class FootballCoachBot:
             await self.notify_admins_about_payment(update, context, photo, course_title, price, user_id)
                 
         except Exception as e:
-            error_logger.error(f"Error processing payment receipt for user {user_id}: {e}", exc_info=True)
+            payment_logger.error(f"Error processing payment receipt for user {user_id}: {e}", exc_info=True)
             # Use error handler for better error reporting
             await admin_error_handler.handle_admin_error(
                 update, context, e, "process_new_course_payment", user_id
@@ -2564,7 +2570,13 @@ class FootballCoachBot:
         """Check if user can submit more receipt attempts for a course"""
         try:
             user_data = await self.data_manager.get_user_data(user_id)
-            receipt_attempts = user_data.get('receipt_attempts', {})
+            if not user_data:
+                user_data = {}
+                
+            receipt_attempts = user_data.get('receipt_attempts')
+            if receipt_attempts is None:
+                receipt_attempts = {}
+                
             course_attempts = receipt_attempts.get(course_code, 0)
             
             # Check if admin has allowed additional attempts
@@ -2603,7 +2615,7 @@ class FootballCoachBot:
             }
             
         except Exception as e:
-            error_logger.error(f"Error checking receipt limits for user {user_id}, course {course_code}: {e}", exc_info=True)
+            payment_logger.error(f"Error checking receipt limits for user {user_id}, course {course_code}: {e}", exc_info=True)
             # Allow submission if there's an error (fail safe)
             return {
                 'allowed': True,
