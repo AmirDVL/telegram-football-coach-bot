@@ -1238,6 +1238,7 @@ class FootballCoachBot:
             
         elif query.data == 'nutrition_plan':
             # Handle nutrition plan selection directly
+            await query.answer()
             await self.handle_course_details(update, context)
 
     async def handle_course_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2371,7 +2372,7 @@ class FootballCoachBot:
         await update.message.reply_text(
             f"🔍 DEBUG: تصویر در زمینه نامعتبر ارسال شد\n\n"
             f"وضعیت فعلی:\n"
-            f"📊 در حال پرسشنامه: {in_questionnaire}\n"
+            f"📊 در حال پرسشنامه: {in_questionnaire_mode}\n"
             f"💳 در جریان پرداخت: {actively_in_payment_flow}\n"
             f"🎯 انتظار کوپن: {user_context.get('waiting_for_coupon', False)}\n\n"
             f"برای شروع مجدد: /start"
@@ -5084,7 +5085,7 @@ def main():
     application.add_handler(CommandHandler("remove_admin", bot.admin_panel.remove_admin_command))
     
     application.add_handler(CallbackQueryHandler(bot.handle_main_menu, pattern='^(in_person|online|nutrition_plan)$'))
-    application.add_handler(CallbackQueryHandler(bot.handle_course_details, pattern='^(in_person_cardio|in_person_weights|online_weights|online_cardio|online_combo|nutrition_plan)$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_course_details, pattern='^(in_person_cardio|in_person_weights|online_weights|online_cardio|online_combo)$'))
     application.add_handler(CallbackQueryHandler(bot.handle_payment, pattern='^payment_'))
     application.add_handler(CallbackQueryHandler(bot.handle_coupon_request, pattern='^coupon_'))
     application.add_handler(CallbackQueryHandler(bot.handle_questionnaire_choice, pattern='^q_answer_'))
