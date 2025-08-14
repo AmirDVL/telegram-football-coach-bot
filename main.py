@@ -5,6 +5,7 @@ import os
 import json
 import csv
 import io
+import traceback
 from datetime import datetime
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -4298,91 +4299,108 @@ class FootballCoachBot:
         
         user_id = update.effective_user.id
         
-        # Get user data and purchased courses
-        user_data = await self.data_manager.get_user_data(user_id)
-        purchased_courses = await self.get_user_purchased_courses(user_id)
-        
-        # Check if user has any courses with approved payment (including nutrition plan)
-        user_status = await self.get_user_status(user_data)
-        
-        if not purchased_courses or user_status != 'payment_approved':
-            await query.edit_message_text(
-                "❌ برای دسترسی به پرسشنامه، باید:\n\n"
-                "✅ یک دوره خریداری کرده باشید\n"
-                "✅ پرداخت شما تایید شده باشد\n\n"
-                "لطفاً ابتدا یک دوره خرید کرده و پرداخت خود را تکمیل کنید.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🛒 خرید دوره", callback_data='new_course')],
-                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
-                    [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
-                ])
-            )
-            return
-        
-        # Get current question and show it
-        current_question = await self.questionnaire_manager.get_current_question(user_id)
-        if current_question:
-            # CRITICAL FIX: Set questionnaire_active flag when continuing questionnaire
-            if user_id not in context.user_data:
-                context.user_data[user_id] = {}
-            context.user_data[user_id]['questionnaire_active'] = True
+        try:
+            # Get user data and purchased courses
+            user_data = await self.data_manager.get_user_data(user_id)
+            purchased_courses = await self.get_user_purchased_courses(user_id)
             
-            question_text = f"""{current_question['progress_text']}
+            # Check if user has any courses with approved payment (including nutrition plan)
+            user_status = await self.get_user_status(user_data)
+            
+            if not purchased_courses or user_status != 'payment_approved':
+                await query.edit_message_text(
+                    "❌ برای دسترسی به پرسشنامه، باید:\n\n"
+                    "✅ یک دوره خریداری کرده باشید\n"
+                    "✅ پرداخت شما تایید شده باشد\n\n"
+                    "لطفاً ابتدا یک دوره خرید کرده و پرداخت خود را تکمیل کنید.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🛒 خرید دوره", callback_data='new_course')],
+                        [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                        [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+                    ])
+                )
+                return
+            
+            # Get current question and show it
+            current_question = await self.questionnaire_manager.get_current_question(user_id)
+            if current_question:
+                # CRITICAL FIX: Set questionnaire_active flag when continuing questionnaire
+                if user_id not in context.user_data:
+                    context.user_data[user_id] = {}
+                context.user_data[user_id]['questionnaire_active'] = True
+                
+                question_text = f"""{current_question['progress_text']}
 
 {current_question['text']}"""
-            
-            # Add choices as buttons if it's a choice question
-            keyboard = []
-            if current_question.get('type') in ['choice', 'multichoice']:
-                choices = current_question.get('choices', [])
-                for choice in choices:
-                    keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-            
-            # Add navigation buttons
-            keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='back_to_user_menu')])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-            
-            await query.edit_message_text(question_text, reply_markup=reply_markup)
-        else:
-            # User has valid access but no questionnaire data - start new questionnaire
-            logger.info(f"Starting new questionnaire for user {user_id} - no existing progress found")
-            
-            # Start questionnaire
-            progress = await self.questionnaire_manager.start_questionnaire(user_id)
-            
-            # CRITICAL FIX: Set questionnaire_active flag when starting new questionnaire from continue
-            if user_id not in context.user_data:
-                context.user_data[user_id] = {}
-            context.user_data[user_id]['questionnaire_active'] = True
-            
-            first_question = await self.questionnaire_manager.get_current_question(user_id)
-            
-            if first_question:
-                question_text = f"""🎉 شروع پرسشنامه!
-
-{first_question['progress_text']}
-
-{first_question['text']}"""
                 
                 # Add choices as buttons if it's a choice question
                 keyboard = []
-                if first_question.get('type') in ['choice', 'multichoice']:
-                    choices = first_question.get('choices', [])
+                if current_question.get('type') in ['choice', 'multichoice']:
+                    choices = current_question.get('choices', [])
                     for choice in choices:
                         keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
                 
                 # Add navigation buttons
                 keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='back_to_user_menu')])
                 
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+                
                 await query.edit_message_text(question_text, reply_markup=reply_markup)
             else:
-                # Fallback error if even starting questionnaire fails
-                await query.edit_message_text(
-                    "❌ خطا در شروع پرسشنامه.\n\n"
-                    "لطفاً از /start استفاده کرده و مجدداً تلاش کنید."
-                )
+                # User has valid access but no questionnaire data - start new questionnaire
+                user_logger.info(f"Starting new questionnaire for user {user_id} - no existing progress found")
+                
+                # Start questionnaire
+                progress = await self.questionnaire_manager.start_questionnaire(user_id)
+                
+                # CRITICAL FIX: Set questionnaire_active flag when starting new questionnaire from continue
+                if user_id not in context.user_data:
+                    context.user_data[user_id] = {}
+                context.user_data[user_id]['questionnaire_active'] = True
+                
+                first_question = await self.questionnaire_manager.get_current_question(user_id)
+                
+                if first_question:
+                    question_text = f"""🎉 شروع پرسشنامه!
+
+{first_question['progress_text']}
+
+{first_question['text']}"""
+                    
+                    # Add choices as buttons if it's a choice question
+                    keyboard = []
+                    if first_question.get('type') in ['choice', 'multichoice']:
+                        choices = first_question.get('choices', [])
+                        for choice in choices:
+                            keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                    
+                    # Add navigation buttons
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منو", callback_data='back_to_user_menu')])
+                    
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await query.edit_message_text(question_text, reply_markup=reply_markup)
+                else:
+                    # Fallback error if even starting questionnaire fails
+                    await query.edit_message_text(
+                        "❌ خطا در شروع پرسشنامه.\n\n"
+                        "لطفاً از /start استفاده کرده و مجدداً تلاش کنید.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='continue_questionnaire')],
+                            [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+                        ])
+                    )
+        except Exception as e:
+            error_logger.error(f"Error in continue_questionnaire_callback for user {user_id}: {e}")
+            error_logger.error(f"Traceback: {traceback.format_exc()}")
+            await query.edit_message_text(
+                "❌ خطایی در راه‌اندازی پرسشنامه رخ داد.\n\n"
+                "لطفاً چند لحظه صبر کرده و مجدداً تلاش کنید.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='continue_questionnaire')],
+                    [InlineKeyboardButton("📊 وضعیت من", callback_data='my_status')],
+                    [InlineKeyboardButton("🔙 منوی اصلی", callback_data='back_to_user_menu')]
+                ])
+            )
 
     async def show_user_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show comprehensive user status - ALL information in one place"""
