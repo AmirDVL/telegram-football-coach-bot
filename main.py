@@ -3071,6 +3071,10 @@ class FootballCoachBot:
             # Remove from pending payments
             if target_user_id in self.payment_pending:
                 del self.payment_pending[target_user_id]
+
+            # Check questionnaire status before sending questionnaire 
+            log_admin_action(user_id, "Checking questionnaire status before notification", f"User: {target_user_id}")
+            quest_status = await self.get_user_questionnaire_requirement_status(target_user_id)
             
             # Notify user and start questionnaire automatically
             log_admin_action(user_id, "Starting automatic questionnaire notification", f"User: {target_user_id}")
@@ -3079,27 +3083,20 @@ class FootballCoachBot:
             notification_error = None
             
             try:
-                # Get first question to start questionnaire immediately
-                user_logger.debug(f"Starting questionnaire for user {target_user_id}")
-                await self.questionnaire_manager.start_questionnaire(target_user_id)
-                
-                user_logger.debug(f"Getting first question for user {target_user_id}")
-                first_question = await self.questionnaire_manager.get_current_question(target_user_id)
-                
-                if first_question:
-                    # Send approval message with first question directly
-                    progress_text = "سوال 1 از 21"
-                    message = f"✅ پرداخت شما تایید شد!\n\n📝 حالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:\n\n{progress_text}\n\n{first_question['text']}"
+                if quest_status['questionnaire_completed']:
+                    # User already completed questionnaire - show menu with edit option
+                    message = """✅ پرداخت شما تایید شد!
+
+🎉 شما قبلاً پرسشنامه را تکمیل کرده‌اید و می‌توانید از برنامه‌های تمرینی خود استفاده کنید.
+
+📝 اگر می‌خواهید پرسشنامه خود را ویرایش کنید، از گزینه زیر استفاده کنید:"""
                     
-                    keyboard = []
-                    if first_question.get('type') == 'choice':
-                        choices = first_question.get('choices', [])
-                        for choice in choices:
-                            keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                    keyboard = [
+                        [InlineKeyboardButton("✏️ ویرایش پرسشنامه", callback_data='edit_questionnaire')],
+                        [InlineKeyboardButton("📋 مشاهده وضعیت", callback_data='my_status')],
+                        [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]
+                    ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    log_admin_action(user_id, "Sending questionnaire with first question", f"User: {target_user_id}")
                     
                     await context.bot.send_message(
                         chat_id=target_user_id,
@@ -3108,16 +3105,74 @@ class FootballCoachBot:
                     )
                     
                     notification_sent = True
-                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received questionnaire message")
+                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received completed questionnaire menu")
                     
-                else:
-                    # Fallback to button if question not found
-                    error_logger.warning(f"First question not found for user {target_user_id}, using fallback button")
+                elif quest_status['questionnaire_in_progress']:
+                    # User has questionnaire in progress - give option to continue or restart
+                    current_step = quest_status['questionnaire_status'].get('current_step', 1)
+                    message = f"""✅ پرداخت شما تایید شد!
+
+📝 شما پرسشنامه را شروع کرده‌اید و در سوال {current_step} هستید.
+
+می‌خواهید ادامه دهید یا از نو شروع کنید؟"""
                     
-                    keyboard = [[InlineKeyboardButton("🎯 شروع پرسشنامه", callback_data='start_questionnaire')]]
+                    keyboard = [
+                        [InlineKeyboardButton("➡️ ادامه پرسشنامه", callback_data='continue_questionnaire')],
+                        [InlineKeyboardButton("🔄 شروع مجدد پرسشنامه", callback_data='restart_questionnaire')],
+                        [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]
+                    ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     
                     await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text=message,
+                        reply_markup=reply_markup
+                    )
+                    
+                    notification_sent = True
+                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received in-progress questionnaire menu")
+                    
+                else:
+                    # User needs to start questionnaire - existing logic
+                    # Get first question to start questionnaire immediately
+                    user_logger.debug(f"Starting questionnaire for user {target_user_id}")
+                    await self.questionnaire_manager.start_questionnaire(target_user_id)
+                    
+                    user_logger.debug(f"Getting first question for user {target_user_id}")
+                    first_question = await self.questionnaire_manager.get_current_question(target_user_id)
+                    
+                    if first_question:
+                        # Send approval message with first question directly
+                        progress_text = "سوال 1 از 21"
+                        message = f"✅ پرداخت شما تایید شد!\n\n📝 حالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:\n\n{progress_text}\n\n{first_question['text']}"
+                        
+                        keyboard = []
+                        if first_question.get('type') == 'choice':
+                            choices = first_question.get('choices', [])
+                            for choice in choices:
+                                keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        log_admin_action(user_id, "Sending questionnaire with first question", f"User: {target_user_id}")
+                        
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text=message,
+                            reply_markup=reply_markup
+                        )
+                        
+                        notification_sent = True
+                        log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received questionnaire message")
+                        
+                    else:
+                        # Fallback to button if question not found
+                        error_logger.warning(f"First question not found for user {target_user_id}, using fallback button")
+                        
+                        keyboard = [[InlineKeyboardButton("🎯 شروع پرسشنامه", callback_data='start_questionnaire')]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        await context.bot.send_message(
                         chat_id=target_user_id,
                         text="✅ پرداخت شما تایید شد!\n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:",
                         reply_markup=reply_markup
@@ -3888,7 +3943,37 @@ class FootballCoachBot:
         """Handle text input during questionnaire edit mode"""
         user_id = update.effective_user.id
         sanitized_input = sanitize_text(text_input)
-        await self.questionnaire_manager.update_answer_in_edit_mode(update, context, user_id, sanitized_input)
+        
+        result = await self.questionnaire_manager.update_answer_in_edit_mode(user_id, sanitized_input)
+        
+        if result["status"] == "answer_updated":
+            # Send confirmation message
+            confirmation_msg = await update.message.reply_text(result["message"])
+            
+            # Get updated question with the new answer for immediate UI refresh
+            questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
+            if questionnaire_progress and questionnaire_progress.get("edit_mode", False):
+                current_step = questionnaire_progress.get("edit_step", 1)
+                question = self.questionnaire_manager.get_question(current_step, questionnaire_progress["answers"])
+                current_answer = questionnaire_progress["answers"].get(str(current_step), "")
+                
+                # Display refreshed question with updated answer and navigation buttons
+                answer_text = f"\n\n💡 پاسخ فعلی: {current_answer}" if current_answer else ""
+                message = f"✏️ حالت ویرایش پرسشنامه\n\n{question['text']}{answer_text}\n\n📝 پاسخ جدید خود را وارد کنید یا از دکمه‌های ناوبری استفاده کنید:"
+                
+                keyboard = [
+                    [InlineKeyboardButton("⬅️ سوال قبلی", callback_data='edit_prev'),
+                     InlineKeyboardButton("➡️ سوال بعدی", callback_data='edit_next')],
+                    [InlineKeyboardButton("✅ اتمام ویرایش", callback_data='finish_edit')],
+                    [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
+                ]
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # Send the refreshed edit interface
+                await update.message.reply_text(message, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(f"❌ {result['message']}")
 
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -3993,30 +4078,37 @@ class FootballCoachBot:
         # Start the questionnaire
         result = await self.questionnaire_manager.start_questionnaire(user_id)
         
-        if result["status"] == "success":
+        # The questionnaire manager returns progress object, not status object
+        if result and "current_step" in result:
             # CRITICAL FIX: Set questionnaire_active flag for text input routing
             if user_id not in context.user_data:
                 context.user_data[user_id] = {}
             context.user_data[user_id]['questionnaire_active'] = True
             
-            question = result["question"]
-            message = f"""{result['progress_text']}
+            # Get the current question
+            current_step = result.get("current_step", 1)
+            question = self.questionnaire_manager.get_question(current_step, result.get("answers", {}))
+            
+            if question:
+                message = f"""{question.get('progress_text', f'سوال {current_step} از 21')}
 
 {question['text']}"""
-            
-            keyboard = []
-            if question.get('type') == 'choice':
-                choices = question.get('choices', [])
-                for choice in choices:
-                    keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                
+                keyboard = []
+                if question.get('type') == 'choice':
+                    choices = question.get('choices', [])
+                    for choice in choices:
+                        keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                else:
+                    keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(message, reply_markup=reply_markup)
             else:
-                keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(message, reply_markup=reply_markup)
+                await query.edit_message_text("❌ خطا در بارگذاری سوال پرسشنامه")
         else:
-            await query.edit_message_text(f"❌ خطا در شروع پرسشنامه: {result['message']}")
+            await query.edit_message_text("❌ خطا در شروع پرسشنامه، لطفا دوباره تلاش کنید")
 
     async def back_to_main(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Return to main menu using unified status-based menu"""
@@ -4057,7 +4149,16 @@ class FootballCoachBot:
             # CRITICAL FIX: Clear questionnaire_active flag but preserve questionnaire data
             # User exits active questionnaire session but keeps progress for later
             if user_id in context.user_data and 'questionnaire_active' in context.user_data[user_id]:
-                context.user_data[user_id]['questionnaire_active'] = False
+                # Check if user is in edit mode and clear it from questionnaire data
+                questionnaire_progress = await self.questionnaire_manager.load_user_progress(user_id)
+                if questionnaire_progress and questionnaire_progress.get("edit_mode", False):
+                    # User is exiting edit mode via back button - clear edit mode
+                    questionnaire_progress["edit_mode"] = False
+                    questionnaire_progress.pop("edit_step", None)
+                    await self.questionnaire_manager.save_user_progress(user_id, questionnaire_progress)
+                    logger.info(f"🧹 CLEARED EDIT MODE - User {user_id} via back button")
+                
+                context.user_data[user_id].pop('questionnaire_active', None)
                 logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} via back button (progress preserved)")
             
             logger.info(f"👤 PRESERVING QUESTIONNAIRE STATE - User {user_id} | back_to_user_menu preserves progress")
@@ -4480,13 +4581,16 @@ class FootballCoachBot:
             # All courses (including nutrition plans) need questionnaire for personalization
             q_status = await self.questionnaire_manager.get_user_questionnaire_status(user_id)
             if not q_status.get('completed'):
-                keyboard.append([InlineKeyboardButton(" ادامه پرسشنامه", callback_data='continue_questionnaire')])
+                keyboard.append([InlineKeyboardButton("➡️ ادامه پرسشنامه", callback_data='continue_questionnaire')])
             else:
+                # User has completed questionnaire - show program view and edit options
+                keyboard.append([InlineKeyboardButton("✏️ ویرایش پرسشنامه", callback_data='edit_questionnaire')])
+                
                 # Show appropriate program view button based on what courses they have
                 has_nutrition_plan = 'nutrition_plan' in purchased_courses
                 if has_nutrition_plan and len(purchased_courses) == 1:
                     # Only nutrition plan
-                    keyboard.append([InlineKeyboardButton(" مشاهده برنامه غذایی", callback_data='view_program')])
+                    keyboard.append([InlineKeyboardButton("🍎 مشاهده برنامه غذایی", callback_data='view_program')])
                 else:
                     # Training courses or mixed courses
                     keyboard.append([InlineKeyboardButton("📋 مشاهده برنامه تمرینی", callback_data='view_program')])
@@ -4633,7 +4737,12 @@ class FootballCoachBot:
             
             # Start edit mode
             result = await self.questionnaire_manager.start_edit_mode(user_id)
-            if result["status"] == "success":
+            if result["status"] == "edit_started":
+                # Set questionnaire_active flag for text input detection
+                user_context = context.user_data.get(user_id, {})
+                user_context['questionnaire_active'] = True
+                context.user_data[user_id] = user_context
+                
                 question = result["question"]
                 current_answer = result["current_answer"]
                 
@@ -4667,10 +4776,10 @@ class FootballCoachBot:
         action = query.data  # 'edit_prev' or 'edit_next'
         
         try:
-            direction = 'previous' if action == 'edit_prev' else 'next'
+            direction = 'backward' if action == 'edit_prev' else 'forward'
             result = await self.questionnaire_manager.navigate_edit_mode(user_id, direction)
             
-            if result["status"] == "success":
+            if result["status"] == "edit_navigation":
                 question = result["question"]
                 current_answer = result["current_answer"]
                 
@@ -4705,7 +4814,12 @@ class FootballCoachBot:
         try:
             # Finish edit mode
             result = await self.questionnaire_manager.finish_edit_mode(user_id)
-            if result["status"] == "success":
+            if result["status"] == "edit_finished":
+                # Clear questionnaire_active flag
+                user_context = context.user_data.get(user_id, {})
+                user_context.pop('questionnaire_active', None)
+                context.user_data[user_id] = user_context
+                
                 await query.answer("✅ ویرایش با موفقیت ذخیره شد!", show_alert=True)
                 # Return to main menu
                 await self.back_to_user_menu(update, context)

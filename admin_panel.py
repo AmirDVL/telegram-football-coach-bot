@@ -172,6 +172,9 @@ class AdminPanel:
                 elif len(parts) >= 4 and parts[1] == 'online':
                     course_code = f"{parts[1]}_{parts[2]}"
                     plan_id = '_'.join(parts[3:])
+                elif len(parts) >= 4 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                    course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
+                    plan_id = '_'.join(parts[3:])
                 else:
                     course_code = parts[1]
                     plan_id = '_'.join(parts[2:])
@@ -194,6 +197,9 @@ class AdminPanel:
                 elif len(parts) >= 4 and parts[1] == 'online':
                     course_code = f"{parts[1]}_{parts[2]}"
                     plan_id = '_'.join(parts[3:])
+                elif len(parts) >= 4 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                    course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
+                    plan_id = '_'.join(parts[3:])
                 else:
                     course_code = parts[1]
                     plan_id = '_'.join(parts[2:])
@@ -208,6 +214,9 @@ class AdminPanel:
                     plan_id = '_'.join(parts[4:])
                 elif len(parts) >= 4 and parts[1] == 'online':
                     course_code = f"{parts[1]}_{parts[2]}"
+                    plan_id = '_'.join(parts[3:])
+                elif len(parts) >= 4 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                    course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
                     plan_id = '_'.join(parts[3:])
                 else:
                     course_code = parts[1]
@@ -2773,6 +2782,25 @@ class AdminPanel:
             
             plans_file = f'admin_data/course_plans/{course_type}.json'
             
+            # Special handling for nutrition_plan - check for both nutrition_plan.json and nutrition.json
+            if course_type == 'nutrition_plan':
+                primary_file = f'admin_data/course_plans/nutrition_plan.json'
+                fallback_file = f'admin_data/course_plans/nutrition.json'
+                
+                if os.path.exists(primary_file):
+                    plans_file = primary_file
+                elif os.path.exists(fallback_file):
+                    plans_file = fallback_file
+                    # Optional: migrate data from nutrition.json to nutrition_plan.json
+                    try:
+                        import shutil
+                        shutil.copy2(fallback_file, primary_file)
+                        print(f"✅ Migrated nutrition plans from {fallback_file} to {primary_file}")
+                        plans_file = primary_file
+                    except Exception as e:
+                        print(f"⚠️ Could not migrate nutrition plans: {e}, using fallback file")
+                        plans_file = fallback_file
+            
             # Check for old file in root directory and migrate if exists
             old_file = f'course_plans_{course_type}.json'
             if os.path.exists(old_file) and not os.path.exists(plans_file):
@@ -2794,7 +2822,14 @@ class AdminPanel:
             # Ensure admin data directory structure exists
             os.makedirs('admin_data/course_plans', exist_ok=True)
             
-            plans_file = f'admin_data/course_plans/{course_type}.json'
+            # Special handling for nutrition_plan - always save to nutrition_plan.json
+            if course_type == 'nutrition_plan':
+                plans_file = 'admin_data/course_plans/nutrition_plan.json'
+            elif course_type == 'nutrition':
+                # If someone tries to save as 'nutrition', redirect to 'nutrition_plan.json'
+                plans_file = 'admin_data/course_plans/nutrition_plan.json'
+            else:
+                plans_file = f'admin_data/course_plans/{course_type}.json'
             
             # Enhanced logging with more details
             print(f"🔧 PLAN SAVE DEBUG - Course: {course_type}, Plans count: {len(plans)}, File: {plans_file}")
@@ -2969,6 +3004,8 @@ class AdminPanel:
                         course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"  # in_person_cardio or in_person_weights
                     elif len(parts) >= 3 and parts[1] == 'online':
                         course_code = f"{parts[1]}_{parts[2]}"  # online_cardio, online_weights, online_combo
+                    elif len(parts) >= 3 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                        course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
                     else:
                         # Fallback - assume single word course code
                         course_code = parts[1]
@@ -2988,6 +3025,9 @@ class AdminPanel:
                         plan_id = '_'.join(parts[4:])
                     elif len(parts) >= 4 and parts[1] == 'online':
                         course_code = f"{parts[1]}_{parts[2]}"  # online_cardio, online_weights, online_combo
+                        plan_id = '_'.join(parts[3:])
+                    elif len(parts) >= 4 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                        course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
                         plan_id = '_'.join(parts[3:])
                     else:
                         # Fallback - assume single word course code
@@ -3009,6 +3049,9 @@ class AdminPanel:
                     elif len(parts) >= 4 and parts[1] == 'online':
                         course_code = f"{parts[1]}_{parts[2]}"
                         plan_id = '_'.join(parts[3:])
+                    elif len(parts) >= 4 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                        course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
+                        plan_id = '_'.join(parts[3:])
                     else:
                         course_code = parts[1]
                         plan_id = '_'.join(parts[2:])
@@ -3027,6 +3070,9 @@ class AdminPanel:
                     elif len(parts) >= 4 and parts[1] == 'online':
                         course_code = f"{parts[1]}_{parts[2]}"
                         plan_id = '_'.join(parts[3:])
+                    elif len(parts) >= 4 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                        course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
+                        plan_id = '_'.join(parts[3:])
                     else:
                         course_code = parts[1]
                         plan_id = '_'.join(parts[2:])
@@ -3043,6 +3089,8 @@ class AdminPanel:
                         course_code = f"{parts[1]}_{parts[2]}_{parts[3]}"
                     elif len(parts) >= 3 and parts[1] == 'online':
                         course_code = f"{parts[1]}_{parts[2]}"
+                    elif len(parts) >= 3 and parts[1] == 'nutrition' and parts[2] == 'plan':
+                        course_code = f"{parts[1]}_{parts[2]}"  # nutrition_plan
                     else:
                         course_code = parts[1]
                     await self.handle_send_latest_user_plan(query, user_id, course_code, context)
