@@ -1237,9 +1237,35 @@ class FootballCoachBot:
             await query.edit_message_text("انتخاب کنید:", reply_markup=reply_markup)
             
         elif query.data == 'nutrition_plan':
-            # Handle nutrition plan selection directly
+            # Handle nutrition plan selection directly 
             await query.answer()
-            await self.handle_course_details(update, context)
+            # Check if user already owns this course
+            user_id = update.effective_user.id
+            if await self.has_purchased_course(user_id, 'nutrition_plan'):
+                await query.answer(
+                    "✅ شما قبلاً این دوره را خریداری کرده‌اید!\n"
+                    "برای دسترسی به برنامه تغذیه خود از منو استفاده کنید.",
+                    show_alert=True
+                )
+                return
+                
+            course = Config.COURSE_DETAILS['nutrition_plan']
+            price = Config.PRICES['nutrition_plan']
+            
+            # Format price properly using the utility function
+            price_text = Config.format_price(price)
+            
+            message_text = f"{course['title']}👇👇👇👇👇\n\n{course['description']}"
+            
+            keyboard = [
+                [InlineKeyboardButton(f"💳 پرداخت و ثبت نام ({price_text})", callback_data='payment_nutrition_plan')],
+                [InlineKeyboardButton("🏷️ کد تخفیف دارم", callback_data='coupon_nutrition_plan')],
+                [InlineKeyboardButton("🔙 بازگشت به انتخاب دوره", callback_data='back_to_course_selection')],
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
+            ]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(message_text, reply_markup=reply_markup)
 
     async def handle_course_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle detailed course information"""
