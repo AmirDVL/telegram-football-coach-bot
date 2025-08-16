@@ -2780,6 +2780,16 @@ class FootballCoachBot:
             elif result["status"] == "need_more_photos":
                 await update.message.reply_text(result["message"])
                 return
+            elif result["status"] == "can_continue_or_add_more":
+                # User can continue or add more photos
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                keyboard = [
+                    [InlineKeyboardButton("➡️ ادامه به سوال بعد", callback_data='continue_photo_question')],
+                    [InlineKeyboardButton("📷 ارسال عکس بیشتر", callback_data='add_more_photos')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(result["message"], reply_markup=reply_markup)
+                return
             elif result["status"] == "next_question":
                 # Send confirmation and next question
                 await update.message.reply_text("✅ عکس دریافت شد!")
@@ -4074,6 +4084,40 @@ class FootballCoachBot:
         
         # Completion - no further action needed as user has already paid
 
+    async def handle_questionnaire_completion_from_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle questionnaire completion from callback query"""
+        user_id = update.effective_user.id
+        
+        # CRITICAL: Clear all questionnaire states after completion
+        states_cleared = await admin_error_handler.clear_all_input_states(
+            context, user_id, "questionnaire_completion_query"
+        )
+        
+        # CRITICAL FIX: Clear questionnaire_active flag on completion
+        if user_id in context.user_data and 'questionnaire_active' in context.user_data[user_id]:
+            del context.user_data[user_id]['questionnaire_active']
+            logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} on completion (from query)")
+        
+        # Log questionnaire completion
+        log_user_action(user_id, update.effective_user.first_name, "questionnaire completed (from query)")
+        
+        completion_message = """🎉 تبریک! پرسشنامه با موفقیت تکمیل شد
+
+✅ اطلاعات شما ثبت شد و در حال آماده‌سازی برنامه تمرینی شخصی‌سازی شده شما هستیم.
+
+🔄 لطفاً منتظر بمانید تا یکی از مربیان ما با شما تماس بگیرد.
+
+⏰ معمولاً تا چند ساعت آینده برنامه کاملتان آماده خواهد شد.
+
+📞 اگر سوالی دارید، از طریق پشتیبانی ربات با ما در ارتباط باشید."""
+        
+        # Edit the query message to show completion
+        query = update.callback_query
+        await query.edit_message_text(completion_message)
+        
+        # Show status-based menu after completion
+        await self.show_status_based_menu(update, context, await self.data_manager.get_user_data(user_id), update.effective_user.first_name or "کاربر")
+
     async def start_questionnaire_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start questionnaire directly from callback"""
         query = update.callback_query
@@ -4376,6 +4420,15 @@ class FootballCoachBot:
         elif query.data == 'start_questionnaire':
             # Start the questionnaire directly
             await self.start_questionnaire_from_callback(update, context)
+        elif query.data == 'continue_photo_question':
+            # Continue to next question when minimum photo requirements are met
+            await self.handle_continue_photo_question(update, context)
+        elif query.data == 'add_more_photos':
+            # User wants to add more photos - just show message
+            await query.edit_message_text(
+                "📷 عالی! حالا عکس‌های بیشتری ارسال کنید.\n\n"
+                "💡 بعد از ارسال عکس، دوباره گزینه ادامه نمایش داده می‌شود."
+            )
 
     async def handle_nutrition_form_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle nutrition form related callback queries"""
@@ -4424,6 +4477,50 @@ class FootballCoachBot:
             
             await query.edit_message_text(message, reply_markup=reply_markup)
             log_user_action(user_id, "nutrition_form", "User requested help")
+
+    async def handle_continue_photo_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle continuing to next question when minimum photo requirements are met"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        
+        try:
+            # Use questionnaire manager to continue to next question
+            result = await self.questionnaire_manager.continue_to_next_question(user_id)
+            
+            if result["status"] == "error":
+                await query.edit_message_text(result["message"])
+                return
+            elif result["status"] == "next_question":
+                # Send next question
+                progress_text = result.get("progress_text", "")
+                message = f"✅ ادامه به سوال بعد\n\n{progress_text}\n\n{result['question']['text']}"
+                
+                keyboard = []
+                if result['question'].get('type') == 'choice':
+                    choices = result['question'].get('choices', [])
+                    for choice in choices:
+                        keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(message, reply_markup=reply_markup)
+                return
+            elif result["status"] == "completed":
+                # Questionnaire completed
+                await query.edit_message_text(result["message"])
+                await self.handle_questionnaire_completion_from_query(update, context)
+                return
+            else:
+                await query.edit_message_text("❌ خطا در ادامه به سوال بعد!")
+                
+        except Exception as e:
+            error_logger.error(f"Error continuing photo question for user {user_id}: {e}", exc_info=True)
+            await query.edit_message_text(
+                "❌ خطایی رخ داده است!\n\n"
+                "لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."
+            )
 
     async def start_new_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start new course selection process"""
@@ -5303,7 +5400,7 @@ def main():
     # Payment approval handlers - with more specific pattern to avoid conflicts with plan management
     application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_\\d+$|allow_extra_receipt_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_grant_receipt_approval, pattern='^grant_receipt_'))
-    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support||new_course|start_over|start_questionnaire|view_program_.+)$'))
+    application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support||new_course|start_over|start_questionnaire|continue_photo_question|add_more_photos|view_program_.+)$'))
     # Nutrition form callback handlers
     application.add_handler(CallbackQueryHandler(bot.handle_nutrition_form_callbacks, pattern='^(nutrition_form_understood|nutrition_form_question)$'))
     # Edit mode navigation handlers
