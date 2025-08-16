@@ -160,6 +160,15 @@ class QuestionnaireManager:
                 content = await f.read()
                 data = json.loads(content)
                 progress = data.get(str(user_id), None)
+                
+                # MIGRATION: Ensure photos dictionary exists for backward compatibility
+                if progress and "answers" in progress:
+                    if "photos" not in progress["answers"]:
+                        progress["answers"]["photos"] = {}
+                        # Save the migrated data back
+                        await self.save_user_progress(user_id, progress)
+                        print(f"INFO: Migrated user {user_id} questionnaire data to include photos dictionary")
+                
                 return progress
         except Exception as e:
             print(f"Error loading user progress for {user_id}: {e}")
@@ -195,7 +204,7 @@ class QuestionnaireManager:
         # Only create new progress if none exists
         progress = {
             "current_step": 1,
-            "answers": {},
+            "answers": {"photos": {}},  # Initialize photos dictionary for backward compatibility
             "started_at": datetime.now().isoformat(),
             "completed": False
         }
@@ -534,6 +543,10 @@ class QuestionnaireManager:
             
             # EDGE CASE HANDLING: If this is a photo question with partial photos uploaded
             if question.get("type") == "photo":
+                # Ensure photos dictionary exists (backward compatibility)
+                if "photos" not in progress["answers"]:
+                    progress["answers"]["photos"] = {}
+                
                 photos_key = str(current_step)
                 current_photos = len(progress["answers"]["photos"].get(photos_key, []))
                 min_photo_count = question.get("min_photo_count", question.get("photo_count", 1))
@@ -1064,6 +1077,11 @@ class QuestionnaireManager:
         # Check if minimum photo requirements are met
         min_photo_count = current_question.get("min_photo_count", current_question.get("photo_count", 1))
         photos_key = str(current_step)
+        
+        # Ensure photos dictionary exists (backward compatibility)
+        if "photos" not in progress["answers"]:
+            progress["answers"]["photos"] = {}
+            
         current_photos = len(progress["answers"]["photos"].get(photos_key, []))
         
         if current_photos < min_photo_count:
