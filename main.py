@@ -2231,7 +2231,8 @@ class FootballCoachBot:
 
 برای پرداخت به شماره کارت زیر واریز کنید:
 
-💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
+� برای کپی کردن شماره کارت، روی آن کلیک کنید
+�💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
 💰 مبلغ: {final_price_text}"""
         else:
@@ -2241,6 +2242,7 @@ class FootballCoachBot:
 
 برای پرداخت به شماره کارت زیر واریز کنید:
 
+💡 برای کپی کردن شماره کارت، روی آن کلیک کنید
 💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
 💰 مبلغ: {final_price_text}"""

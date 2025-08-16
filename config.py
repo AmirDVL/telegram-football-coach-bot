@@ -56,8 +56,19 @@ class Config:
     @staticmethod
     def format_card_number(card_number: str) -> str:
         """Format card number for RTL display and make it copyable in Telegram with Markdown"""
-        # Use code formatting with proper language specification for better monospace display
-        return f"```\n{card_number}\n```"
+        # Remove any existing formatting and ensure dash-separated format
+        clean_number = ''.join(c for c in card_number if c.isdigit())
+        
+        # Format as XXXX-XXXX-XXXX-XXXX
+        if len(clean_number) == 16:
+            formatted = f"{clean_number[:4]}-{clean_number[4:8]}-{clean_number[8:12]}-{clean_number[12:16]}"
+        else:
+            # If not 16 digits, use original or apply basic formatting
+            formatted = card_number
+        
+        # Add LTR mark to fix RTL-LTR display issues and use single backticks for easy copying
+        # \u200E is Left-to-Right Mark (LTR) to ensure proper direction
+        return f"\u200E`{formatted}`"
     
     @staticmethod
     def format_price(price: int) -> str:
