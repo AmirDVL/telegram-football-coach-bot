@@ -7,19 +7,14 @@ load_dotenv()
 class Config:
     # Bot Configuration
     BOT_TOKEN = os.getenv('BOT_TOKEN')
-    ADMIN_ID = int(os.getenv('ADMIN_ID', '0')) if os.getenv('ADMIN_ID', '').isdigit() else None
     
-    # Multiple Admin Support
+    # Multiple Admin Support - All admins are super admins
     @classmethod
     def get_admin_ids(cls):
-        """Get list of admin IDs from environment variables"""
+        """Get list of super admin IDs from environment variables"""
         admin_ids = []
         
-        # Add primary admin
-        if cls.ADMIN_ID:
-            admin_ids.append(cls.ADMIN_ID)
-        
-        # Add additional admins from ADMIN_IDS
+        # Get super admins from ADMIN_IDS
         admin_ids_env = os.getenv('ADMIN_IDS', '')
         if admin_ids_env:
             for admin_id in admin_ids_env.split(','):

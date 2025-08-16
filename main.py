@@ -315,15 +315,12 @@ class FootballCoachBot:
             logger.error(f"Failed to notify admins about payment update: {e}")
     
     async def _sync_admins_json(self):
-        """Comprehensive admin sync for JSON mode - handles current admins.json format"""
+        """Comprehensive admin sync for JSON mode - all ADMIN_IDS are super admins"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
         
-        log_admin_action(0, f"Syncing {len(admin_ids)} admin(s) to JSON mode...")
-        
-        # Get current super admin from config (ADMIN_ID)
-        config_super_admin = Config.ADMIN_ID
+        log_admin_action(0, f"Syncing {len(admin_ids)} super admin(s) to JSON mode...")
         
         # Load existing admins - handle current format with 'admins' array and 'admin_permissions' dict
         admins_data = await self.data_manager.load_data('admins')
@@ -331,7 +328,7 @@ class FootballCoachBot:
         # Initialize structure if empty or wrong format
         if not admins_data or not isinstance(admins_data, dict):
             admins_data = {
-                'super_admin': config_super_admin,
+                'super_admin': admin_ids[0] if admin_ids else None,  # First admin as primary super admin
                 'admins': [],
                 'admin_permissions': {}
             }
@@ -342,10 +339,10 @@ class FootballCoachBot:
         if 'admin_permissions' not in admins_data:
             admins_data['admin_permissions'] = {}
         if 'super_admin' not in admins_data:
-            admins_data['super_admin'] = config_super_admin
+            admins_data['super_admin'] = admin_ids[0] if admin_ids else None
         
-        # Update super admin
-        admins_data['super_admin'] = config_super_admin
+        # Update super admin to first admin in list
+        admins_data['super_admin'] = admin_ids[0] if admin_ids else None
         
         # Track changes
         added_count = 0
@@ -356,38 +353,36 @@ class FootballCoachBot:
         current_admin_ids = set(admins_data['admins'])
         env_admin_ids = set(admin_ids)
         
-        # Add new admins from environment
+        # Add new admins from environment - ALL are super admins
         for admin_id in admin_ids:
-            is_super = (admin_id == config_super_admin)
-            
             if admin_id not in current_admin_ids:
                 # Add to admins array
                 admins_data['admins'].append(admin_id)
-                # Add permissions
+                # Add permissions - ALL are super admins now
                 admins_data['admin_permissions'][str(admin_id)] = {
-                    'can_add_admins': is_super,
-                    'can_remove_admins': is_super,
+                    'can_add_admins': True,  # All ADMIN_IDS are super admins
+                    'can_remove_admins': True,  # All ADMIN_IDS are super admins
                     'can_view_users': True,
                     'can_manage_payments': True,
-                    'is_super_admin': is_super,
+                    'is_super_admin': True,  # All ADMIN_IDS are super admins
                     'added_by': 'env_sync',
                     'added_date': datetime.now().isoformat(),
                     'synced_from_config': True
                 }
-                log_admin_action(0, f"Added admin to JSON: {admin_id}")
+                log_admin_action(0, f"Added super admin to JSON: {admin_id}")
                 added_count += 1
             else:
-                # Update existing admin's permissions if changed
+                # Update existing admin's permissions - ensure they're super admin
                 admin_perms = admins_data['admin_permissions'].get(str(admin_id), {})
                 current_is_super = admin_perms.get('is_super_admin', False)
                 
-                if current_is_super != is_super:
-                    admins_data['admin_permissions'][str(admin_id)]['is_super_admin'] = is_super
-                    admins_data['admin_permissions'][str(admin_id)]['can_add_admins'] = is_super
-                    admins_data['admin_permissions'][str(admin_id)]['can_remove_admins'] = is_super
+                if not current_is_super:
+                    # Promote to super admin
+                    admins_data['admin_permissions'][str(admin_id)]['is_super_admin'] = True
+                    admins_data['admin_permissions'][str(admin_id)]['can_add_admins'] = True
+                    admins_data['admin_permissions'][str(admin_id)]['can_remove_admins'] = True
                     admins_data['admin_permissions'][str(admin_id)]['updated_date'] = datetime.now().isoformat()
-                    role_change = "promoted to super admin" if is_super else "demoted from super admin"
-                    log_admin_action(0, f"Admin {admin_id} {role_change}")
+                    log_admin_action(0, f"Admin {admin_id} promoted to super admin (all ADMIN_IDS are super)")
                     updated_count += 1
         
         # Remove admins who are no longer in environment (AGGRESSIVE SYNC - removes ALL non-env admins)
@@ -407,23 +402,23 @@ class FootballCoachBot:
         
         total_changes = added_count + updated_count + removed_count
         if total_changes > 0:
-            log_admin_action(0, f"JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated, {removed_count} removed")
+            log_admin_action(0, f"JSON admin sync completed! {len(admin_ids)} env super admins active, {added_count} added, {updated_count} updated, {removed_count} removed")
         else:
-            log_admin_action(0, f"JSON admin sync verified! {len(admin_ids)} env admins are properly synced")
+            log_admin_action(0, f"JSON admin sync verified! {len(admin_ids)} env super admins are properly synced")
     
     async def _sync_admins_database(self):
-        """Comprehensive admin sync for database mode using admin_manager"""
+        """Comprehensive admin sync for database mode using admin_manager - all ADMIN_IDS are super admins"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
             return
         
-        log_admin_action(0, f"Syncing {len(admin_ids)} admin(s) to database mode...")
+        log_admin_action(0, f"Syncing {len(admin_ids)} super admin(s) to database mode...")
         
         # Use the comprehensive sync method from admin_manager
         success = await self.admin_panel.admin_manager.sync_admins_from_config()
         
         if success:
-            log_admin_action(0, "Database admin sync completed! Manual cleanup available via /admin_panel.")
+            log_admin_action(0, "Database admin sync completed! All ADMIN_IDS are super admins. Manual cleanup available via /admin_panel.")
         else:
             logger.warning(f"⚠️ Database admin sync encountered issues.")
     
