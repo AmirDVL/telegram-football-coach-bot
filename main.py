@@ -2215,15 +2215,7 @@ class FootballCoachBot:
         
         # Special message for nutrition plan
         if course_type == 'nutrition_plan':
-            payment_message = f"""🥗 برنامه غذایی شخصی‌سازی شده
-
-با توجه به اهداف و شرایط جسمانی شما، یک برنامه غذایی کاملاً شخصی‌سازی شده تهیه می‌شود.
-
-برای دریافت برنامه غذایی، لطفاً روی لینک زیر کلیک کنید:
-
-👈 https://fitava.ir/coach/drbohloul/question
-
-✨ این برنامه شامل:
+            payment_message = f"""✨ این برنامه شامل:
 • برنامه غذایی کامل بر اساس نیازهای شما
 • راهنمایی تخصصی تغذیه ورزشی
 • پیگیری و تنظیم برنامه
@@ -2231,8 +2223,8 @@ class FootballCoachBot:
 
 برای پرداخت به شماره کارت زیر واریز کنید:
 
-� برای کپی کردن شماره کارت، روی آن کلیک کنید
-�💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
+💡 برای کپی کردن شماره کارت، روی آن کلیک کنید
+💳 شماره کارت: {Config.format_card_number(Config.PAYMENT_CARD_NUMBER)}
 👤 نام صاحب حساب: {Config.PAYMENT_CARD_HOLDER}
 💰 مبلغ: {final_price_text}"""
         else:
@@ -3085,7 +3077,34 @@ class FootballCoachBot:
             notification_error = None
             
             try:
-                if quest_status['questionnaire_completed']:
+                # Special handling for nutrition plan
+                if course_type == 'nutrition_plan':
+                    message = """✅ پرداخت شما تایید شد!
+
+🥗 برای دریافت برنامه غذایی شخصی‌سازی شده، لطفاً روی لینک زیر کلیک کنید:
+
+👈 https://fitava.ir/coach/drbohloul/question
+
+❌ توجه داشته باشید همه فیلدهای فرم را پر کنید و برای قسمت اعداد، کیورد اعداد انگلیسی را وارد کنید
+
+آیا متوجه شدید که باید روی لینک کلیک کنید و فرم را پر کنید؟"""
+                    
+                    keyboard = [
+                        [InlineKeyboardButton("✅ بله، متوجه شدم", callback_data='nutrition_form_understood')],
+                        [InlineKeyboardButton("❓ سوال دارم", callback_data='nutrition_form_question')]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text=message,
+                        reply_markup=reply_markup
+                    )
+                    
+                    notification_sent = True
+                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received nutrition plan form notification")
+                    
+                elif quest_status['questionnaire_completed']:
                     # User already completed questionnaire - show menu with edit option
                     message = """✅ پرداخت شما تایید شد!
 
@@ -4358,6 +4377,54 @@ class FootballCoachBot:
             # Start the questionnaire directly
             await self.start_questionnaire_from_callback(update, context)
 
+    async def handle_nutrition_form_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle nutrition form related callback queries"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        
+        if query.data == 'nutrition_form_understood':
+            # User confirmed they understood - show completion message
+            message = """✅ عالی! 
+
+اکنون روی لینک کلیک کنید و فرم را پر کنید. پس از تکمیل فرم، برنامه غذایی شخصی‌سازی شده‌تان آماده خواهد شد.
+
+📞 اگر سوالی داشتید، می‌توانید با @DrBohloul تماس بگیرید."""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔗 رفتن به فرم", url='https://fitava.ir/coach/drbohloul/question')],
+                [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data='back_to_user_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(message, reply_markup=reply_markup)
+            log_user_action(user_id, "nutrition_form", "User confirmed understanding")
+            
+        elif query.data == 'nutrition_form_question':
+            # User has questions - show help message
+            message = """❓ راهنمایی برای فرم برنامه غذایی:
+
+🔗 **مرحله 1:** روی لینک کلیک کنید: https://fitava.ir/coach/drbohloul/question
+
+📝 **مرحله 2:** همه فیلدهای فرم را پر کنید (هیچ فیلدی را خالی نگذارید)
+
+🔢 **مرحله 3:** برای قسمت‌هایی که عدد می‌خواهند، حتماً از اعداد انگلیسی استفاده کنید (مثل: 25 به جای ۲۵)
+
+✅ **مرحله 4:** فرم را ارسال کنید تا برنامه غذایی‌تان آماده شود
+
+📞 برای سوالات بیشتر: @DrBohloul"""
+            
+            keyboard = [
+                [InlineKeyboardButton("✅ متوجه شدم، برم فرم را پر کنم", callback_data='nutrition_form_understood')],
+                [InlineKeyboardButton("🔗 رفتن به فرم", url='https://fitava.ir/coach/drbohloul/question')],
+                [InlineKeyboardButton("🏠 منوی اصلی", callback_data='back_to_user_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(message, reply_markup=reply_markup)
+            log_user_action(user_id, "nutrition_form", "User requested help")
+
     async def start_new_course_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start new course selection process"""
         try:
@@ -5237,6 +5304,8 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.handle_payment_approval, pattern='^(approve_payment_|reject_payment_|view_user_\\d+$|allow_extra_receipt_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_grant_receipt_approval, pattern='^grant_receipt_'))
     application.add_handler(CallbackQueryHandler(bot.handle_status_callbacks, pattern='^(my_status|check_payment_status|continue_questionnaire|restart_questionnaire|edit_questionnaire|view_program|contact_support||new_course|start_over|start_questionnaire|view_program_.+)$'))
+    # Nutrition form callback handlers
+    application.add_handler(CallbackQueryHandler(bot.handle_nutrition_form_callbacks, pattern='^(nutrition_form_understood|nutrition_form_question)$'))
     # Edit mode navigation handlers
     application.add_handler(CallbackQueryHandler(bot.handle_edit_navigation, pattern='^(edit_prev|edit_next)$'))
     application.add_handler(CallbackQueryHandler(bot.finish_edit_mode, pattern='^finish_edit$'))
