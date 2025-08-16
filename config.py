@@ -56,15 +56,15 @@ class Config:
     @staticmethod
     def format_card_number(card_number: str) -> str:
         """Format card number for RTL display and make it copyable in Telegram with Markdown"""
-        # Remove any existing formatting and ensure dash-separated format
+        # Remove any existing formatting to get clean digits only
         clean_number = ''.join(c for c in card_number if c.isdigit())
         
-        # Format as XXXX-XXXX-XXXX-XXXX
+        # Use clean number without dashes for easy copying
         if len(clean_number) == 16:
-            formatted = f"{clean_number[:4]}-{clean_number[4:8]}-{clean_number[8:12]}-{clean_number[12:16]}"
+            formatted = clean_number
         else:
-            # If not 16 digits, use original or apply basic formatting
-            formatted = card_number
+            # If not 16 digits, remove any non-digits from original
+            formatted = ''.join(c for c in card_number if c.isdigit()) or card_number
         
         # Add LTR mark to fix RTL-LTR display issues and use single backticks for easy copying
         # \u200E is Left-to-Right Mark (LTR) to ensure proper direction
