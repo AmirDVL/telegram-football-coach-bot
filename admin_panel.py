@@ -5,6 +5,7 @@ from data_manager import DataManager
 from coupon_manager import CouponManager
 from config import Config
 from admin_error_handler import admin_error_handler
+from admin_debugger import admin_debugger
 import json
 import csv
 import io
@@ -15,33 +16,24 @@ import shutil
 import traceback
 from datetime import datetime
 import logging
-from csv_exporter import generate_csv
 
-# Setup specialized loggers for the admin panel
-admin_logger = logging.getLogger('admin_actions')
-error_logger = logging.getLogger('errors')
-user_logger = logging.getLogger('user_interactions')
-payment_logger = logging.getLogger('payment_processing')
-logger = logging.getLogger(__name__)  # Main logger for general use
+# Setup logger for admin panel
+logger = logging.getLogger(__name__)
 
 class AdminPanel:
     def __init__(self):
         # Use bot_data.json for AdminManager to match main.py admin sync
-        self.admin_manager = AdminManager(admins_file=Config.BOT_DATA_FILE)
+        self.admin_manager = AdminManager(admins_file='bot_data.json')
         self.data_manager = DataManager()
         self.coupon_manager = CouponManager()
         self.admin_creating_coupons = set()  # Track which admins are creating coupons
     
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Redirect to unified admin hub - no separate menu"""
-        if not update.effective_user:
-            return
-            
         user_id = update.effective_user.id
         
         if not await self.admin_manager.is_admin(user_id):
-            if update.message:
-                await update.message.reply_text("❌ شما دسترسی ادمین ندارید.")
+            await update.message.reply_text("❌ شما دسترسی ادمین ندارید.")
             return
         
         # Show the unified admin hub directly
@@ -50,13 +42,15 @@ class AdminPanel:
     async def handle_admin_callbacks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle admin panel callbacks with comprehensive error handling"""
         query = update.callback_query
-        if not query or not update.effective_user:
-            return
-            
         user_id = update.effective_user.id
         
         try:
             await query.answer()
+            
+            # Log callback attempt for debugging
+            await admin_debugger.log_callback_attempt(
+                update, query.data, user_id, success=True
+            )
             
             # Log admin action
             await admin_error_handler.log_admin_action(
@@ -67,26 +61,29 @@ class AdminPanel:
                 await query.edit_message_text("❌ شما دسترسی ادمین ندارید.")
                 return
             
-            admin_logger.info(f"Admin {user_id} triggered callback: {query.data}")
+            logger.info(f"Admin {user_id} triggered callback: {query.data}")
             
             # Main callback routing with comprehensive error handling
             await self._route_admin_callback(query, context, user_id)
             
         except Exception as e:
+            # Log the error with full context
+            await admin_debugger.log_callback_attempt(
+                update, query.data, user_id, success=False, error=str(e)
+            )
+            
             # Handle the error gracefully
-            callback_data = query.data if query else "unknown"
             error_handled = await admin_error_handler.handle_admin_error(
-                update, context, e, f"callback_query:{callback_data}", user_id
+                update, context, e, f"callback_query:{query.data}", user_id
             )
             
             if not error_handled:
                 # If error handler couldn't handle it, send a basic error message
                 try:
-                    if query:
-                        await query.edit_message_text(
-                            "❌ خطای غیرمنتظره رخ داد. لطفاً مجددا تلاش کنید.\n\n"
-                            "اگر مشکل ادامه دارد، دستور /admin را مجددا اجرا کنید."
-                        )
+                    await query.edit_message_text(
+                        "❌ خطای غیرمنتظره رخ داد. لطفاً مجددا تلاش کنید.\n\n"
+                        "اگر مشکل ادامه دارد، دستور /admin را مجددا اجرا کنید."
+                    )
                 except Exception:
                     pass  # Even error handling failed
                 
@@ -94,48 +91,17 @@ class AdminPanel:
                 raise e
 
     async def _route_admin_callback(self, query, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-        """Route admin callbacks to appropriate handlers with timeout protection"""
+        """Route admin callbacks to appropriate handlers"""
         callback_data = query.data
         
         # Add debug logging for callback routing
-        admin_logger.debug(f"Routing callback: {callback_data}")
-        
-        # Special handling for potentially long-running operations
-        if callback_data == 'admin_stats':
-            try:
-                # Use asyncio timeout for statistics to prevent hanging
-                import asyncio
-                await asyncio.wait_for(self.show_statistics(query), timeout=25.0)
-                return
-            except asyncio.TimeoutError:
-                logger.error(f"Statistics callback timed out for user {user_id}")
-                await query.edit_message_text(
-                    "⏰ زمان انتظار تمام شد\n\n"
-                    "محاسبه آمار بیش از حد طول کشید. این معمولاً به دلیل حجم زیاد داده‌ها است.\n\n"
-                    "💡 راهکارهای پیشنهادی:\n"
-                    "• چند دقیقه صبر کرده و مجددا تلاش کنید\n"
-                    "• از ساعات کم‌ترافیک استفاده کنید\n"
-                    "• با پشتیبانی تماس بگیرید",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='admin_stats')],
-                        [InlineKeyboardButton("🔙 بازگشت به پنل", callback_data='admin_menu')]
-                    ])
-                )
-                return
-            except Exception as e:
-                logger.error(f"Error in statistics: {e}")
-                await query.edit_message_text(
-                    "❌ خطا در محاسبه آمار\n\nلطفاً مجددا تلاش کنید.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='admin_stats')],
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_menu')]
-                    ])
-                )
-                return
+        logger.debug(f"Routing callback: {callback_data}")
         
         # Main admin menu callbacks
         if callback_data == 'admin_menu':
             await self.show_admin_hub_for_command_query(query, user_id)
+        elif callback_data == 'admin_stats':
+            await self.show_statistics(query)
         elif callback_data == 'admin_users':
             await self.show_users_management(query)
         elif callback_data.startswith('users_page_'):
@@ -143,6 +109,8 @@ class AdminPanel:
             await self.show_users_management(query, page)
         elif callback_data == 'admin_payments':
             await self.show_payments_management(query)
+        elif callback_data == 'admin_pending_payments':
+            await self.show_pending_payments(query)
         elif callback_data == 'admin_export_menu':
             await self.show_export_menu(query)
         elif callback_data == 'admin_coupons':
@@ -152,16 +120,16 @@ class AdminPanel:
             
         # New plan management callbacks - Person-centric approach
         elif callback_data.startswith('user_plans_'):
-            admin_logger.info(f"🎯 ROUTING: user_plans_ -> {callback_data}")
+            logger.info(f"🎯 ROUTING: user_plans_ -> {callback_data}")
             user_id = callback_data.split('_', 2)[2]
             await self.show_user_course_plans(query, user_id)
         elif callback_data.startswith('manage_user_course_'):
-            admin_logger.info(f"🎯 ROUTING: manage_user_course_ -> {callback_data}")
+            logger.info(f"🎯 ROUTING: manage_user_course_ -> {callback_data}")
             parts = callback_data.split('_', 3)
             user_id, course_code = parts[3].split('_', 1)
             await self.show_user_course_plan_management_enhanced(query, user_id, course_code)
         elif callback_data.startswith('confirm_delete_'):
-            admin_logger.info(f"🎯 ROUTING: confirm_delete_ -> {callback_data}")
+            logger.info(f"🎯 ROUTING: confirm_delete_ -> {callback_data}")
             # confirm_delete_USER_ID_COURSE_CODE_PLAN_ID
             parts = callback_data.replace('confirm_delete_', '').split('_')
             if len(parts) >= 4:
@@ -179,7 +147,7 @@ class AdminPanel:
             else:
                 await query.answer("❌ خطا در تجزیه دستور!")
         elif callback_data.startswith(('upload_user_plan_', 'send_user_plan_', 'view_user_plan_', 'delete_user_plan_', 'send_latest_plan_')):
-            admin_logger.info(f"🎯 ROUTING: new plan management callback -> {callback_data}")
+            logger.info(f"🎯 ROUTING: new plan management callback -> {callback_data}")
             await self.handle_new_plan_callback_routing(query, context)
         
         # Main plan assignment callbacks
@@ -216,7 +184,7 @@ class AdminPanel:
             
         # Legacy plan management callbacks (keeping for backward compatibility)
         elif callback_data.startswith(('plan_course_', 'upload_plan_', 'send_plan_', 'view_plans_', 'send_to_user_', 'send_to_all_', 'view_plan_')):
-            admin_logger.info(f"Routing legacy plan management callback: {callback_data}")
+            logger.info(f"Routing legacy plan management callback: {callback_data}")
             await self.handle_plan_callback_routing(query, context)
             
         # Export callbacks
@@ -261,11 +229,9 @@ class AdminPanel:
         elif callback_data == 'admin_cleanup_non_env':
             await self.handle_cleanup_non_env_admins(query, user_id)
         elif callback_data.startswith('admin_add_admin_'):
-            # Show admin management instead of missing handler
-            await self.show_admin_management(query, user_id)
+            await self.handle_add_admin(query, user_id)
         elif callback_data.startswith('admin_remove_admin_'):
-            # Show admin management instead of missing handler
-            await self.show_admin_management(query, user_id)
+            await self.handle_remove_admin(query, user_id)
         
         # Plan upload management
         elif callback_data == 'skip_plan_description':
@@ -279,7 +245,7 @@ class AdminPanel:
         
         else:
             # Unknown callback - log for debugging
-            admin_logger.warning(f"Unknown admin callback: {callback_data}")
+            logger.warning(f"Unknown admin callback: {callback_data}")
             await admin_error_handler.log_admin_action(
                 user_id, "unknown_callback", {"callback_data": callback_data}
             )
@@ -294,6 +260,39 @@ class AdminPanel:
                 ]])
             )
 
+    async def show_debug_panel(self, query, admin_id: int):
+        """Show admin debug panel"""
+        try:
+            # Generate debug report
+            debug_report = await admin_debugger.create_debug_report(admin_id)
+            error_summary = await admin_error_handler.get_error_summary(admin_id, limit=5)
+            file_status = await admin_debugger.get_file_system_status()
+            callback_test = await admin_debugger.test_callback_routing()
+            
+            keyboard = [
+                [InlineKeyboardButton("🔍 تست کال‌بک", callback_data='admin_debug_test')],
+                [InlineKeyboardButton("📊 گزارش کامل", callback_data='admin_debug_full')],
+                [InlineKeyboardButton("🗑️ پاک کردن لاگ‌ها", callback_data='admin_debug_clear')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+            ]
+            
+            text = f"""🔍 پنل دیباگ ادمین
+            
+{error_summary}
+
+📁 وضعیت فایل‌ها:
+{file_status}
+
+🧪 تست کال‌بک:
+{callback_test[:500]}..."""
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await admin_error_handler.handle_admin_error(
+                query, None, e, "show_debug_panel", admin_id
+            )
     
     async def handle_admin_user_mode(self, query, admin_id) -> None:
         """Allow admin to test user interface without losing admin privileges"""
@@ -377,125 +376,116 @@ class AdminPanel:
             )
     
     async def show_statistics(self, query) -> None:
-        """Show bot statistics with timeout handling"""
+        """Show bot statistics"""
         try:
-            # First, show a loading message to the user
-            await query.edit_message_text(
-                "📊 در حال محاسبه آمار...\n⏳ لطفاً چند ثانیه صبر کنید...",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
-                ])
-            )
+            # Load data from data_manager
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            # Use data_manager for async operations
-            users_data = {}
-            payments_data = {}
+            users = data.get('users', {})
+            payments = data.get('payments', {})
+            stats = data.get('statistics', {})
             
-            # Try to load data with timeout protection
-            try:
-                if os.path.exists(Config.BOT_DATA_FILE):
-                    with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    users_data = data.get('users', {})
-                    payments_data = data.get('payments', {})
-                else:
-                    # Fallback to data_manager if file doesn't exist
-                    logger.warning("BOT_DATA_FILE not found, using empty data")
-                    
-            except Exception as file_error:
-                logger.error(f"Error loading bot data file: {file_error}")
-                # Show error with fallback stats
-                await query.edit_message_text(
-                    "⚠️ خطا در بارگذاری اطلاعات آمار\n\n"
-                    "ممکن است فایل داده‌ها در دسترس نباشد یا حجم آن زیاد باشد.\n\n"
-                    "لطفاً بعداً مجددا تلاش کنید.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
-                    ])
-                )
-                return
+            total_users = len(users)
+            total_payments = len(payments)
+            # Only count approved payments for revenue calculation
+            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
+            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
+            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
+            rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
             
-            # Calculate statistics efficiently
-            total_users = len(users_data)
-            total_payments = len(payments_data)
-            
-            # Count payment statuses efficiently
-            approved_count = 0
-            pending_count = 0
-            rejected_count = 0
-            total_revenue = 0
+            # Course statistics - Count actual payments by course type (not user course field)
             course_stats = {}
-            
-            for payment_data in payments_data.values():
-                status = payment_data.get('status', '')
-                if status == 'approved':
-                    approved_count += 1
-                    total_revenue += payment_data.get('price', 0)
-                    # Count by course type
+            for payment_data in payments.values():
+                if payment_data.get('status') == 'approved':  # Only count approved payments
                     course = payment_data.get('course_type')
                     if course:
                         course_stats[course] = course_stats.get(course, 0) + 1
-                elif status == 'pending_approval':
-                    pending_count += 1
-                elif status == 'rejected':
-                    rejected_count += 1
             
-            # Build statistics message
             stats_text = "📊 آمار کلی ربات:\n\n"
-            stats_text += f"👥 تعداد کل کاربران: {total_users:,}\n"
-            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments:,}\n"
-            stats_text += f"  ✅ تایید شده: {approved_count:,}\n"
-            stats_text += f"  ⏳ در انتظار: {pending_count:,}\n"
-            stats_text += f"  ❌ رد شده: {rejected_count:,}\n"
+            stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
+            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments}\n"
+            stats_text += f"  ✅ تایید شده: {approved_payments}\n"
+            stats_text += f"  ⏳ در انتظار: {pending_payments}\n"
+            stats_text += f"  ❌ رد شده: {rejected_payments}\n"
             stats_text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
+            stats_text += "📚 آمار دوره‌ها:"
             
-            if course_stats:
-                stats_text += "📚 آمار دوره‌ها:\n"
-                course_names = {
+            for course, count in course_stats.items():
+                course_name = {
                     'online_weights': 'وزنه آنلاین',
                     'online_cardio': 'هوازی آنلاین',
                     'in_person_cardio': 'حضوری هوازی',
                     'in_person_weights': 'حضوری وزنه',
                     'online_combo': 'آنلاین ترکیبی',
                     'nutrition_plan': 'برنامه تغذیه'
-                }
-                
-                for course, count in course_stats.items():
-                    course_name = course_names.get(course, course)
-                    stats_text += f"  • {course_name}: {count:,} نفر\n"
-            else:
-                stats_text += "📚 آمار دوره‌ها: هیچ دوره‌ای تایید نشده\n"
-            
-            # Add timestamp
-            from datetime import datetime
-            stats_text += f"\n🕐 آخرین به‌روزرسانی: {datetime.now().strftime('%H:%M:%S')}"
+                }.get(course, course)
+                stats_text += f"\n  • {course_name}: {count} نفر"
             
             keyboard = [
-                [InlineKeyboardButton("� به‌روزرسانی", callback_data='admin_stats')],
-                [InlineKeyboardButton("�🔙 بازگشت", callback_data='admin_back_main')]
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(stats_text, reply_markup=reply_markup)
             
         except Exception as e:
-            logger.error(f"Error in show_statistics: {e}")
-            error_message = (
-                "❌ خطا در نمایش آمار\n\n"
-                "ممکن است حجم اطلاعات زیاد باشد یا مشکلی در سیستم رخ داده باشد.\n\n"
-                "💡 راهکارهای پیشنهادی:\n"
-                "• چند دقیقه صبر کرده و مجددا تلاش کنید\n"
-                "• از بخش مدیریت کاربران برای آمار محدود استفاده کنید\n"
-                "• با پشتیبانی تماس بگیرید اگر مشکل ادامه دارد"
-            )
+            await query.edit_message_text(f"❌ خطا در نمایش آمار: {str(e)}", 
+                                        reply_markup=InlineKeyboardMarkup([
+                                            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
+                                        ]))
+            # Load data from data_manager
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            await query.edit_message_text(
-                error_message, 
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 تلاش مجدد", callback_data='admin_stats')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back_main')]
-                ])
-            )
+            users = data.get('users', {})
+            payments = data.get('payments', {})
+            stats = data.get('statistics', {})
+            
+            total_users = len(users)
+            total_payments = len(payments)
+            # Only count approved payments for revenue calculation
+            total_revenue = sum(payment.get('price', 0) for payment in payments.values() if payment.get('status') == 'approved')
+            approved_payments = len([p for p in payments.values() if p.get('status') == 'approved'])
+            pending_payments = len([p for p in payments.values() if p.get('status') == 'pending_approval'])
+            rejected_payments = len([p for p in payments.values() if p.get('status') == 'rejected'])
+            
+            # Course statistics - Count actual payments by course type (not user course field)  
+            course_stats = {}
+            for payment_data in payments.values():
+                if payment_data.get('status') == 'approved':  # Only count approved payments
+                    course = payment_data.get('course_type')
+                    if course:
+                        course_stats[course] = course_stats.get(course, 0) + 1
+            
+            stats_text = "📊 آمار کلی ربات:\n\n"
+            stats_text += f"👥 تعداد کل کاربران: {total_users}\n"
+            stats_text += f"💳 تعداد کل پرداخت‌ها: {total_payments}\n"
+            stats_text += f"  ✅ تایید شده: {approved_payments}\n"
+            stats_text += f"  ⏳ در انتظار: {pending_payments}\n"
+            stats_text += f"  ❌ رد شده: {rejected_payments}\n"
+            stats_text += f"💰 درآمد کل (تایید شده): {total_revenue:,} تومان\n\n"
+            stats_text += "📚 آمار دوره‌ها:"
+            
+            for course, count in course_stats.items():
+                course_name = {
+                    'online_weights': 'وزنه آنلاین',
+                    'online_cardio': 'هوازی آنلاین', 
+                    'online_combo': 'ترکیبی آنلاین',
+                    'in_person_cardio': 'هوازی حضوری',
+                    'in_person_weights': 'وزنه حضوری',
+                    'nutrition_plan': 'برنامه غذایی'
+                }.get(course, course)
+                
+                stats_text += f"\n• {course_name}: {count} نفر"
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت به منوی اصلی ادمین", callback_data='admin_back_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(stats_text, reply_markup=reply_markup)
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا در نمایش آمار: {str(e)}")
     
     async def show_admin_management(self, query, user_id: int) -> None:
         """Show admin management panel"""
@@ -566,29 +556,26 @@ class AdminPanel:
                         manual_admins.append(admin_info)
             else:
                 # List format
-                if admins_data and hasattr(admins_data, '__iter__'):
-                    for admin in admins_data:
-                        admin_id = admin.get('user_id')
-                        admin_type = "🔥 سوپر ادمین" if admin.get('is_super_admin') else "👤 ادمین"
-                        admin_info = f"{admin_type}: {admin_id}"
-                        
-                        # Check if this is an environment admin
-                        is_env_admin = (
-                            admin.get('added_by') == 'env_sync' or 
-                            admin.get('env_admin') == True or
-                            admin.get('synced_from_config') == True or
-                            admin.get('force_synced') == True or
-                            admin_id in env_admin_ids
-                        )
-                        
-                        if is_env_admin:
-                            admin_info += " 🌍 (از فایل تنظیمات)"
-                            env_admins.append(admin_info)
-                        else:
-                            admin_info += " 🤝 (اضافه شده دستی)"
-                            manual_admins.append(admin_info)
-                else:
-                    manual_admins.append("هیچ ادمینی یافت نشد")
+                for admin in admins_data:
+                    admin_id = admin.get('user_id')
+                    admin_type = "🔥 سوپر ادمین" if admin.get('is_super_admin') else "👤 ادمین"
+                    admin_info = f"{admin_type}: {admin_id}"
+                    
+                    # Check if this is an environment admin
+                    is_env_admin = (
+                        admin.get('added_by') == 'env_sync' or 
+                        admin.get('env_admin') == True or
+                        admin.get('synced_from_config') == True or
+                        admin.get('force_synced') == True or
+                        admin_id in env_admin_ids
+                    )
+                    
+                    if is_env_admin:
+                        admin_info += " 🌍 (از فایل تنظیمات)"
+                        env_admins.append(admin_info)
+                    else:
+                        admin_info += " 🤝 (اضافه شده دستی)"
+                        manual_admins.append(admin_info)
         
         for admin_info in env_admins:
             text += admin_info + "\n"
@@ -614,7 +601,7 @@ class AdminPanel:
     async def show_users_management(self, query, page: int = 0) -> None:
         """Show users management with pagination and safe formatting"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             users = data.get('users', {})
@@ -685,7 +672,7 @@ class AdminPanel:
             await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='MarkdownV2', disable_web_page_preview=True)
             
         except Exception as e:
-            error_logger.error(f"Error in show_users_management: {e}", exc_info=True)
+            logger.error(f"Error in show_users_management: {e}")
             await query.edit_message_text(
                 f"❌ خطا در نمایش کاربران:\n\n"
                 f"جزئیات: {str(e)}\n\n"
@@ -696,7 +683,7 @@ class AdminPanel:
     async def show_payments_management(self, query) -> None:
         """Show payments management"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             payments = data.get('payments', {})
@@ -750,7 +737,7 @@ class AdminPanel:
     
     async def back_to_manage_admins(self, query, user_id: int) -> None:
         """Return to admin management menu"""
-        await self.show_admin_management(query, user_id)
+        await self.show_admin_management(query)
     
     async def back_to_stats_menu(self, query, user_id: int) -> None:
         """Return to statistics menu"""
@@ -809,9 +796,6 @@ class AdminPanel:
 
     async def show_admin_hub_for_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
         """Show the unified admin hub when called from command (/admin)"""
-        if not update.effective_user or not update.message:
-            return
-            
         is_super = await self.admin_manager.is_super_admin(user_id)
         can_manage_admins = await self.admin_manager.can_add_admins(user_id)
         user_name = update.effective_user.first_name or "ادمین"
@@ -866,9 +850,6 @@ class AdminPanel:
 
     async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /add_admin command"""
-        if not update.effective_user or not update.message:
-            return
-            
         user_id = update.effective_user.id
         
         if not await self.admin_manager.can_add_admins(user_id):
@@ -894,9 +875,6 @@ class AdminPanel:
     
     async def remove_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /remove_admin command"""
-        if not update.effective_user or not update.message:
-            return
-            
         user_id = update.effective_user.id
         
         if not await self.admin_manager.can_remove_admins(user_id):
@@ -953,7 +931,7 @@ class AdminPanel:
                 result_text += f"• حذف شده: {removed_count}\n"
                 result_text += f"• کل ادمین‌های بررسی شده: {total_checked}\n\n"
                 
-                if removal_details and isinstance(removal_details, list):
+                if removal_details:
                     result_text += "ادمین‌های حذف شده:\n"
                     for detail in removal_details[:10]:  # Show first 10
                         result_text += f"• {detail}\n"
@@ -973,9 +951,9 @@ class AdminPanel:
                 if isinstance(admins_data, dict):
                     # Convert from dict format {user_id: admin_data} to list format
                     admins_list = []
-                    for user_id_str, admin_data in admins_data.items():
+                    for user_id, admin_data in admins_data.items():
                         admin_info = admin_data.copy()
-                        admin_info['user_id'] = int(user_id_str)
+                        admin_info['user_id'] = int(user_id)
                         admins_list.append(admin_info)
                     admins_data = admins_list
                 
@@ -1018,19 +996,12 @@ class AdminPanel:
                     
                     await self.data_manager.save_data('admins', remaining_admins_dict)
                 else:
-                    # List format - convert to dict format for saving
-                    remaining_admins_list = [
+                    # List format
+                    remaining_admins = [
                         admin for admin in admins_data 
                         if admin not in non_env_admins
                     ]
-                    # Convert list to dict format
-                    remaining_admins_dict = {}
-                    for admin in remaining_admins_list:
-                        user_id = admin.get('user_id')
-                        if user_id:
-                            remaining_admins_dict[str(user_id)] = admin
-                    
-                    await self.data_manager.save_data('admins', remaining_admins_dict)
+                    await self.data_manager.save_data('admins', remaining_admins)
                 
                 removed_count = len(non_env_admins)
                 
@@ -1063,9 +1034,6 @@ class AdminPanel:
     
     async def get_id_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /id command to show user's ID"""
-        if not update.effective_user or not update.message:
-            return
-            
         user_id = update.effective_user.id
         username = update.effective_user.username
         first_name = update.effective_user.first_name
@@ -1097,7 +1065,7 @@ class AdminPanel:
     async def show_pending_payments(self, query) -> None:
         """Show pending payments for quick admin access"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             payments = data.get('payments', {})
@@ -1150,14 +1118,14 @@ class AdminPanel:
         await query.edit_message_text(text, reply_markup=reply_markup)
 
     async def export_users_csv(self, query) -> None:
-        """Export users data to CSV format using the new exporter."""
+        """Export users data to CSV format"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            users_data = list(data.get('users', {}).values())
+            users = data.get('users', {})
             
-            if not users_data:
+            if not users:
                 await query.edit_message_text(
                     "📭 هیچ کاربری برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
@@ -1166,35 +1134,42 @@ class AdminPanel:
                 )
                 return
             
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
             headers = [
                 'user_id', 'name', 'username', 'course_selected', 'payment_status',
                 'questionnaire_completed', 'registration_date', 'last_interaction'
             ]
+            writer.writerow(headers)
             
-            # Prepare data for CSV
-            export_data = []
-            for user in users_data:
-                export_data.append({
-                    'user_id': user.get('user_id'),
-                    'name': user.get('name', ''),
-                    'username': user.get('username', ''),
-                    'course_selected': user.get('course_selected', ''),
-                    'payment_status': user.get('payment_status', ''),
-                    'questionnaire_completed': user.get('questionnaire_completed', False),
-                    'registration_date': user.get('last_updated', ''),
-                    'last_interaction': user.get('last_interaction', '')
-                })
-
-            csv_file = generate_csv(export_data, headers)
+            # Write user data
+            for user_id, user_data in users.items():
+                row = [
+                    user_id,
+                    user_data.get('name', ''),
+                    user_data.get('username', ''),
+                    user_data.get('course_selected', ''),
+                    user_data.get('payment_status', ''),
+                    user_data.get('questionnaire_completed', False),
+                    user_data.get('last_updated', ''),
+                    user_data.get('last_interaction', '')
+                ]
+                writer.writerow(row)
             
+            csv_content = output.getvalue()
+            
+            # Send CSV file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"users_export_{timestamp}.csv"
             
             await query.message.reply_document(
-                document=csv_file,
+                document=io.BytesIO(csv_content.encode('utf-8')),
                 filename=filename,
                 caption=f"📤 صادرات کاربران\n\n"
-                       f"📊 تعداد: {len(users_data)} کاربر\n"
+                       f"📊 تعداد: {len(users)} کاربر\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
@@ -1206,14 +1181,14 @@ class AdminPanel:
             await query.edit_message_text(f"❌ خطا در صادرات کاربران: {str(e)}")
 
     async def export_payments_csv(self, query) -> None:
-        """Export payments data to CSV format using the new exporter."""
+        """Export payments data to CSV format"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            payments_data = list(data.get('payments', {}).values())
+            payments = data.get('payments', {})
             
-            if not payments_data:
+            if not payments:
                 await query.edit_message_text(
                     "📭 هیچ پرداختی برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
@@ -1222,21 +1197,42 @@ class AdminPanel:
                 )
                 return
             
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
             headers = [
                 'payment_id', 'user_id', 'course_type', 'price', 'status',
                 'payment_date', 'approval_date', 'rejection_reason'
             ]
+            writer.writerow(headers)
             
-            csv_file = generate_csv(payments_data, headers)
+            # Write payment data
+            for payment_id, payment_data in payments.items():
+                row = [
+                    payment_id,
+                    payment_data.get('user_id', ''),
+                    payment_data.get('course_type', ''),
+                    payment_data.get('price', ''),
+                    payment_data.get('status', ''),
+                    payment_data.get('timestamp', ''),
+                    payment_data.get('approval_date', ''),
+                    payment_data.get('rejection_reason', '')
+                ]
+                writer.writerow(row)
             
+            csv_content = output.getvalue()
+            
+            # Send CSV file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"payments_export_{timestamp}.csv"
             
             await query.message.reply_document(
-                document=csv_file,
+                document=io.BytesIO(csv_content.encode('utf-8')),
                 filename=filename,
                 caption=f"📤 صادرات پرداخت‌ها\n\n"
-                       f"📊 تعداد: {len(payments_data)} پرداخت\n"
+                       f"📊 تعداد: {len(payments)} پرداخت\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             
@@ -1248,99 +1244,123 @@ class AdminPanel:
             await query.edit_message_text(f"❌ خطا در صادرات پرداخت‌ها: {str(e)}")
 
     async def export_questionnaire_csv(self, query) -> None:
-        """Export questionnaire data to a more detailed and robust CSV format."""
+        """Export questionnaire data including photos to CSV format"""
         try:
-            questionnaire_file = Config.QUESTIONNAIRE_DATA_FILE
+            # Load questionnaire data
+            questionnaire_file = 'questionnaire_data.json'
             if not os.path.exists(questionnaire_file):
                 await query.edit_message_text(
                     "📭 هیچ داده پرسشنامه‌ای برای صادرات وجود ندارد!",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]])
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                    ])
                 )
                 return
-
+            
             with open(questionnaire_file, 'r', encoding='utf-8') as f:
                 questionnaire_data = json.load(f)
-
-            user_questionnaires = {k: v for k, v in questionnaire_data.items() if k.isdigit() and isinstance(v, dict)}
-
+            
+            # Filter out non-user data (responses, photos, completed are not user IDs)
+            # Only process entries that look like user IDs (numeric strings)
+            user_questionnaires = {}
+            for key, value in questionnaire_data.items():
+                if key.isdigit() and isinstance(value, dict):
+                    user_questionnaires[key] = value
+            
             if not user_questionnaires:
                 await query.edit_message_text(
                     "📭 هیچ پرسشنامه‌ای تکمیل نشده است!",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]])
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]
+                    ])
                 )
                 return
-
+            
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers
             headers = [
-                'user_id', 'completion_status', 'start_date', 'completion_date',
-                'q1_full_name', 'q2_age', 'q3_height', 'q4_weight', 'q5_league_experience',
-                'q6_training_time', 'q7_competition_goal', 'q8_team_status', 'q9_recent_training',
-                'q10_cardio_details', 'q11_weights_details', 'q12_equipment', 'q13_main_priority',
-                'q14_injury_history', 'q15_nutrition_sleep', 'q16_training_type', 'q17_challenges',
-                'q18_photo_count', 'q18_photo_ids', 'q19_body_improvement', 'q20_social_media',
-                'q21_phone_number', 'document_count', 'document_info'
+                'user_id', 'نام_فامیل', 'سن', 'قد', 'وزن', 'تجربه_لیگ', 'وقت_تمرین',
+                'هدف_مسابقات', 'وضعیت_تیم', 'تمرین_اخیر', 'جزئیات_هوازی', 'جزئیات_وزنه',
+                'تجهیزات', 'اولویت_اصلی', 'مصدومیت', 'تغذیه_خواب', 'نوع_تمرین', 'چالش‌ها',
+                'تعداد_عکس', 'شناسه‌های_عکس', 'بهبود_بدنی', 'شبکه‌های_اجتماعی', 'شماره_تماس',
+                'تاریخ_شروع', 'تاریخ_تکمیل', 'وضعیت_تکمیل'
             ]
-
-            export_data = []
+            writer.writerow(headers)
+            
+            # Write questionnaire data
             for user_id, user_progress in user_questionnaires.items():
                 answers = user_progress.get('answers', {})
                 photos = answers.get('photos', {})
-                documents = answers.get('documents', {})
-
-                photo_count = sum(len(p) for p in photos.values() if isinstance(p, list))
-                photo_ids = '|'.join([p['file_id'] for step_photos in photos.values() if isinstance(step_photos, list) for p in step_photos if isinstance(p, dict) and 'file_id' in p])
                 
-                doc_count = len(documents)
-                doc_info = '|'.join([f"{step}:{doc.get('name', 'N/A')};{doc.get('file_id', 'N/A')}" for step, doc in documents.items()])
-
-                row = {
-                    'user_id': user_id,
-                    'completion_status': 'Completed' if user_progress.get('completed') else 'In Progress',
-                    'start_date': user_progress.get('started_at', ''),
-                    'completion_date': user_progress.get('completed_at', ''),
-                    'q1_full_name': answers.get('1', ''),
-                    'q2_age': answers.get('2', ''),
-                    'q3_height': answers.get('3', ''),
-                    'q4_weight': answers.get('4', ''),
-                    'q5_league_experience': answers.get('5', ''),
-                    'q6_training_time': answers.get('6', ''),
-                    'q7_competition_goal': answers.get('7', ''),
-                    'q8_team_status': answers.get('8', ''),
-                    'q9_recent_training': answers.get('9', ''),
-                    'q10_cardio_details': answers.get('10', ''),
-                    'q11_weights_details': answers.get('11', ''),
-                    'q12_equipment': answers.get('12', ''),
-                    'q13_main_priority': answers.get('13', ''),
-                    'q14_injury_history': answers.get('14', ''),
-                    'q15_nutrition_sleep': answers.get('15', ''),
-                    'q16_training_type': answers.get('16', ''),
-                    'q17_challenges': answers.get('17', ''),
-                    'q18_photo_count': photo_count,
-                    'q18_photo_ids': photo_ids,
-                    'q19_body_improvement': answers.get('19', ''),
-                    'q20_social_media': answers.get('20', ''),
-                    'q21_phone_number': answers.get('21', ''),
-                    'document_count': doc_count,
-                    'document_info': doc_info
-                }
-                export_data.append(row)
-
-            csv_file = generate_csv(export_data, headers)
+                # Count photos and create file_id list
+                photo_count = 0
+                photo_file_ids = []
+                for step_photos in photos.values():
+                    if isinstance(step_photos, list):
+                        photo_count += len(step_photos)
+                        # Extract file_ids from the photo objects
+                        for photo in step_photos:
+                            if isinstance(photo, dict) and 'file_id' in photo:
+                                photo_file_ids.append(photo['file_id'])
+                            elif isinstance(photo, str):
+                                photo_file_ids.append(photo)  # Legacy format
+                
+                row = [
+                    user_id,
+                    answers.get('1', ''),  # نام فامیل
+                    answers.get('2', ''),  # سن
+                    answers.get('3', ''),  # قد
+                    answers.get('4', ''),  # وزن
+                    answers.get('5', ''),  # تجربه لیگ
+                    answers.get('6', ''),  # وقت تمرین
+                    answers.get('7', ''),  # هدف مسابقات
+                    answers.get('8', ''),  # وضعیت تیم
+                    answers.get('9', ''),  # تمرین اخیر
+                    answers.get('10', ''), # جزئیات هوازی
+                    answers.get('11', ''), # جزئیات وزنه
+                    answers.get('12', ''), # تجهیزات
+                    answers.get('13', ''), # اولویت اصلی
+                    answers.get('14', ''), # مصدومیت
+                    answers.get('15', ''), # تغذیه خواب
+                    answers.get('16', ''), # نوع تمرین
+                    answers.get('17', ''), # چالش‌ها
+                    photo_count,           # تعداد عکس
+                    '|'.join(photo_file_ids), # شناسه‌های عکس (جدا شده با |)
+                    answers.get('19', ''), # بهبود بدنی
+                    answers.get('20', ''), # شبکه‌های اجتماعی
+                    answers.get('21', ''), # شماره تماس
+                    user_progress.get('started_at', ''),
+                    user_progress.get('completed_at', ''),
+                    'تکمیل شده' if user_progress.get('completed', False) else 'در حال انجام'
+                ]
+                writer.writerow(row)
+            
+            csv_content = output.getvalue()
+            
+            # Send CSV file with BOM for proper Persian text display in Excel
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"questionnaire_export_{timestamp}.csv"
-
+            
+            # Add BOM (Byte Order Mark) for UTF-8 to ensure proper display in Excel
+            csv_bytes = '\ufeff'.encode('utf-8') + csv_content.encode('utf-8')
+            
             await query.message.reply_document(
-                document=csv_file,
+                document=io.BytesIO(csv_bytes),
                 filename=filename,
                 caption=f"📤 صادرات پرسشنامه‌ها\n\n"
                        f"📊 تعداد: {len(user_questionnaires)} پرسشنامه\n"
+                       f"📷 شامل اطلاعات عکس‌ها\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}\n"
                        f"💡 برای نمایش صحیح فارسی، با Excel باز کنید"
             )
-
+            
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("✅ فایل CSV پرسشنامه‌ها ارسال شد!", reply_markup=reply_markup)
-
+            
         except Exception as e:
             await admin_error_handler.handle_admin_error(
                 update=query,
@@ -1355,7 +1375,7 @@ class AdminPanel:
         """Show list of users who completed questionnaire for personal export"""
         try:
             # Load questionnaire data
-            questionnaire_file = Config.QUESTIONNAIRE_DATA_FILE
+            questionnaire_file = 'questionnaire_data.json'
             if not os.path.exists(questionnaire_file):
                 await query.edit_message_text(
                     "📭 هیچ کاربری پرسشنامه تکمیل نکرده است!",
@@ -1369,7 +1389,7 @@ class AdminPanel:
                 questionnaire_data = json.load(f)
             
             # Load user data to get names
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 bot_data = json.load(f)
             
             users = bot_data.get('users', {})
@@ -1483,10 +1503,10 @@ class AdminPanel:
         """Export all data for a specific user including questionnaire photos and documents"""
         try:
             # Load all data
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 bot_data = json.load(f)
             
-            questionnaire_file = Config.QUESTIONNAIRE_DATA_FILE
+            questionnaire_file = 'questionnaire_data.json'
             questionnaire_data = {}
             if os.path.exists(questionnaire_file):
                 with open(questionnaire_file, 'r', encoding='utf-8') as f:
@@ -1933,13 +1953,13 @@ class AdminPanel:
     async def export_all_data(self, query) -> None:
         """Export complete database as JSON with admin-friendly format"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             # Load questionnaire data if exists
             questionnaire_data = {}
             try:
-                with open(Config.QUESTIONNAIRE_DATA_FILE, 'r', encoding='utf-8') as f:
+                with open('questionnaire_data.json', 'r', encoding='utf-8') as f:
                     questionnaire_data = json.load(f)
             except FileNotFoundError:
                 pass
@@ -2025,65 +2045,15 @@ class AdminPanel:
         except Exception as e:
             await query.edit_message_text(f"❌ خطا در صادرات کامل: {str(e)}")
 
-    async def generate_users_template(self, query) -> None:
-        """Generate a CSV template for users."""
-        try:
-            headers = [
-                'user_id', 'name', 'username', 'course_selected', 'payment_status',
-                'questionnaire_completed', 'registration_date', 'last_interaction'
-            ]
-            csv_file = generate_csv([], headers)
-
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"users_template_{timestamp}.csv"
-
-            await query.message.reply_document(
-                document=csv_file,
-                filename=filename,
-                caption="📋 نمونه فایل CSV برای کاربران"
-            )
-
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("✅ فایل نمونه کاربران ارسال شد!", reply_markup=reply_markup)
-
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در ایجاد نمونه کاربران: {str(e)}")
-
-    async def generate_payments_template(self, query) -> None:
-        """Generate a CSV template for payments."""
-        try:
-            headers = [
-                'payment_id', 'user_id', 'course_type', 'price', 'status',
-                'payment_date', 'approval_date', 'rejection_reason'
-            ]
-            csv_file = generate_csv([], headers)
-
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"payments_template_{timestamp}.csv"
-
-            await query.message.reply_document(
-                document=csv_file,
-                filename=filename,
-                caption="📋 نمونه فایل CSV برای پرداخت‌ها"
-            )
-
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_export_menu')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("✅ فایل نمونه پرداخت‌ها ارسال شد!", reply_markup=reply_markup)
-
-        except Exception as e:
-            await query.edit_message_text(f"❌ خطا در ایجاد نمونه پرداخت‌ها: {str(e)}")
-
     async def export_telegram_csv(self, query) -> None:
-        """Export Telegram contact information to CSV format using the new exporter."""
+        """Export Telegram contact information to CSV format"""
         try:
-            with open(Config.BOT_DATA_FILE, 'r', encoding='utf-8') as f:
+            with open('bot_data.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            users_data = list(data.get('users', {}).values())
+            users = data.get('users', {})
             
-            if not users_data:
+            if not users:
                 await query.edit_message_text(
                     "📭 هیچ کاربری برای صادرات وجود ندارد!",
                     reply_markup=InlineKeyboardMarkup([
@@ -2092,36 +2062,45 @@ class AdminPanel:
                 )
                 return
             
+            # Create CSV content
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # CSV Headers for telegram data
             headers = [
                 'user_id', 'name', 'username', 'phone', 'telegram_link',
                 'course_selected', 'payment_status', 'registration_date'
             ]
+            writer.writerow(headers)
             
-            # Prepare data for CSV
-            export_data = []
-            for user in users_data:
-                username = user.get('username', '')
-                export_data.append({
-                    'user_id': user.get('user_id'),
-                    'name': user.get('name', ''),
-                    'username': f"@{username}" if username else '',
-                    'phone': user.get('phone', ''),
-                    'telegram_link': f"https://t.me/{username}" if username else '',
-                    'course_selected': user.get('course_selected', ''),
-                    'payment_status': user.get('payment_status', ''),
-                    'registration_date': user.get('last_updated', '')
-                })
+            # Write telegram contact data
+            for user_id, user_data in users.items():
+                username = user_data.get('username', '')
+                telegram_link = f"https://t.me/{username}" if username else ''
+                
+                row = [
+                    user_id,
+                    user_data.get('name', ''),
+                    f"@{username}" if username else '',
+                    user_data.get('phone', ''),
+                    telegram_link,
+                    user_data.get('course_selected', ''),
+                    user_data.get('payment_status', ''),
+                    user_data.get('last_updated', '')
+                ]
+                writer.writerow(row)
             
-            csv_file = generate_csv(export_data, headers)
+            csv_content = output.getvalue()
             
+            # Send CSV file
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"telegram_contacts_{timestamp}.csv"
             
             await query.message.reply_document(
-                document=csv_file,
+                document=io.BytesIO(csv_content.encode('utf-8')),
                 filename=filename,
                 caption=f"📤 صادرات مخاطبین تلگرام\n\n"
-                       f"👥 تعداد: {len(users_data)} مخاطب\n"
+                       f"👥 تعداد: {len(users)} مخاطب\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
             )
             

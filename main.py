@@ -18,7 +18,6 @@ from questionnaire_manager import QuestionnaireManager
 from image_processor import ImageProcessor
 from coupon_manager import CouponManager
 from admin_error_handler import admin_error_handler
-from input_validator import sanitize_text
 
 # Enhanced logging configuration
 def setup_enhanced_logging():
@@ -276,7 +275,16 @@ class FootballCoachBot:
                 admin_ids = await self.admin_panel.admin_manager.get_all_admin_ids()
             else:
                 admins_data = await self.data_manager.load_data('admins')
-                admin_ids = [int(admin_id) for admin_id in admins_data.keys()] if admins_data else []
+                # Filter out non-numeric keys like 'super_admin'
+                admin_ids = []
+                if admins_data:
+                    for admin_id in admins_data.keys():
+                        try:
+                            admin_ids.append(int(admin_id))
+                        except ValueError:
+                            # Skip non-numeric keys like 'super_admin'
+                            logger.debug(f"Skipping non-numeric admin key: {admin_id}")
+                            continue
             
             # Create message based on action
             if action == 'approve':
@@ -313,7 +321,7 @@ class FootballCoachBot:
         if not admin_ids:
             return
         
-        log_admin_action(0, f"Syncing {len(admin_ids)} admin(s) to JSON mode...")
+        logger.info(f"🔄 Syncing {len(admin_ids)} admin(s) to JSON mode...")
         
         # Get current super admin from config (ADMIN_ID)
         config_super_admin = Config.ADMIN_ID
@@ -367,7 +375,7 @@ class FootballCoachBot:
                     'added_date': datetime.now().isoformat(),
                     'synced_from_config': True
                 }
-                log_admin_action(0, f"Added admin to JSON: {admin_id}")
+                logger.info(f"  ✅ Added admin to JSON: {admin_id}")
                 added_count += 1
             else:
                 # Update existing admin's permissions if changed
@@ -380,7 +388,7 @@ class FootballCoachBot:
                     admins_data['admin_permissions'][str(admin_id)]['can_remove_admins'] = is_super
                     admins_data['admin_permissions'][str(admin_id)]['updated_date'] = datetime.now().isoformat()
                     role_change = "promoted to super admin" if is_super else "demoted from super admin"
-                    log_admin_action(0, f"Admin {admin_id} {role_change}")
+                    logger.info(f"  🎖️ Admin {admin_id} {role_change}")
                     updated_count += 1
         
         # Remove admins who are no longer in environment (AGGRESSIVE SYNC - removes ALL non-env admins)
@@ -392,7 +400,7 @@ class FootballCoachBot:
             # Remove permissions
             if str(admin_id_to_remove) in admins_data['admin_permissions']:
                 del admins_data['admin_permissions'][str(admin_id_to_remove)]
-            log_admin_action(0, f"Removed admin from JSON: {admin_id_to_remove} (aggressive sync)")
+            logger.info(f"  ❌ Removed admin from JSON: {admin_id_to_remove} (aggressive sync)")
             removed_count += 1
         
         # Save updated admins data
@@ -400,9 +408,9 @@ class FootballCoachBot:
         
         total_changes = added_count + updated_count + removed_count
         if total_changes > 0:
-            log_admin_action(0, f"JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated, {removed_count} removed")
+            logger.info(f"🎉 JSON admin sync completed! {len(admin_ids)} env admins active, {added_count} added, {updated_count} updated, {removed_count} removed")
         else:
-            log_admin_action(0, f"JSON admin sync verified! {len(admin_ids)} env admins are properly synced")
+            logger.info(f"✅ JSON admin sync verified! {len(admin_ids)} env admins are properly synced")
     
     async def _sync_admins_database(self):
         """Comprehensive admin sync for database mode using admin_manager"""
@@ -410,13 +418,13 @@ class FootballCoachBot:
         if not admin_ids:
             return
         
-        log_admin_action(0, f"Syncing {len(admin_ids)} admin(s) to database mode...")
+        logger.info(f"🔄 Syncing {len(admin_ids)} admin(s) to database mode...")
         
         # Use the comprehensive sync method from admin_manager
         success = await self.admin_panel.admin_manager.sync_admins_from_config()
         
         if success:
-            log_admin_action(0, "Database admin sync completed! Manual cleanup available via /admin_panel.")
+            logger.info(f"🎉 Database admin sync completed! Manual cleanup available via /admin_panel.")
         else:
             logger.warning(f"⚠️ Database admin sync encountered issues.")
     
@@ -467,7 +475,7 @@ class FootballCoachBot:
         
         # Clear any stale payment_pending data when user runs /start
         if user_id in self.payment_pending:
-            user_logger.info(f"Clearing stale payment_pending data for user {user_id} on /start")
+            logger.debug(f"🧹 Clearing stale payment_pending data for user {user_id}")
             del self.payment_pending[user_id]
         
         # COMPREHENSIVE STATE CLEARING - clear ALL possible input states
@@ -478,7 +486,7 @@ class FootballCoachBot:
         # CRITICAL FIX: Clear questionnaire_active flag so random text won't be processed as questionnaire
         if user_id in context.user_data and 'questionnaire_active' in context.user_data[user_id]:
             context.user_data[user_id]['questionnaire_active'] = False
-            user_logger.info(f"CLEARED QUESTIONNAIRE_ACTIVE FLAG for User {user_id} via /start")
+            logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} via /start")
         
         # CRITICAL: Also clear PERSISTENT payment states from user data AND payments table
         # This prevents rejected payments from persisting after /start navigation
@@ -510,14 +518,14 @@ class FootballCoachBot:
                 if payment_status in ['pending_approval', 'rejected', 'pending']:
                     del payments_data[payment_id]
                     payments_cleared.append(payment_id)
-                    log_payment_action(user_id, f"CLEARED PAYMENT RECORD - Payment: {payment_id} | Status: {payment_status}")
+                    logger.info(f"🗑️ CLEARED PAYMENT RECORD - User {user_id} | Payment: {payment_id} | Status: {payment_status}")
         
         # Save cleared payments data
         if payments_cleared:
             await self.data_manager.save_data('payments', payments_data)
         
         if persistent_payment_data:
-            payment_logger.info(f"Clearing persistent payment states for User {user_id}: {list(persistent_payment_data.keys())}")
+            logger.info(f"🧹 CLEARING PERSISTENT PAYMENT STATES - User {user_id} | Cleared: {list(persistent_payment_data.keys())}")
             await self.data_manager.save_user_data(user_id, persistent_payment_data)
         
         # DON'T RESET QUESTIONNAIRE PROGRESS ON /start
@@ -526,7 +534,7 @@ class FootballCoachBot:
         #     user_id, self.questionnaire_manager, "/start command - FORCE RESET"
         # )
         
-        user_logger.info(f"Preserving questionnaire state for User {user_id} on /start")
+        logger.info(f"👤 PRESERVING QUESTIONNAIRE STATE - User {user_id} | /start will show current questionnaire status")
         
         # Clear admin-specific states if user is admin
         is_admin_result = await self.admin_panel.admin_manager.is_admin(user_id)
@@ -537,7 +545,7 @@ class FootballCoachBot:
             )
             
             # ALWAYS redirect admins to admin hub - no exceptions
-            log_admin_action(user_id, "executed /start command", f"Redirected to admin hub | Context states: {states_cleared} | Admin states: {admin_states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared} | Questionnaire preserved")
+            logger.info(f"🔧 ADMIN /start - User {user_id} redirected to admin hub | Context states: {states_cleared} | Admin states: {admin_states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared} | Questionnaire preserved")
             await self.admin_panel.show_admin_hub_for_command(update, context, user_id)
             return
         
@@ -558,7 +566,7 @@ class FootballCoachBot:
         user_data['user_id'] = user_id
         
         # SIMPLE, UNIFIED MENU - always the same layout (questionnaire preserved)
-        user_logger.info(f"User {user_id} redirected to simple unified menu. States cleared: {states_cleared}, Persistent states cleared: {list(persistent_payment_data.keys())}, Payments cleared: {payments_cleared}")
+        logger.info(f"👤 USER /start - User {user_id} redirected to simple unified menu | Context states: {states_cleared} | Persistent states: {list(persistent_payment_data.keys())} | Payments cleared: {payments_cleared} | Questionnaire preserved")
         await self.show_simple_unified_menu(update, context, user_data, user_name)
 
     async def show_simple_unified_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict, user_name: str) -> None:
@@ -606,7 +614,7 @@ class FootballCoachBot:
         try:
             status = await self.get_user_status(user_data)
         except Exception as e:
-            error_logger.error(f"Error determining user status for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error determining user status for user {user_id}: {e}")
             # Default to returning user if status determination fails
             status = 'returning_user'
         
@@ -707,7 +715,11 @@ class FootballCoachBot:
                 total_steps = questionnaire_status.get('total_steps', 21)
                 
                 # CRITICAL DEBUG: Log questionnaire_status raw data for edge case debugging
-                user_logger.info(f"QUESTIONNAIRE STATUS DEBUG for User {user_id}: Raw status: {questionnaire_status}, Step: {current_step}, Answers: {len(questionnaire_status.get('answers', {}))}")
+                logger.info(f"🔍 QUESTIONNAIRE STATUS DEBUG - User {user_id}")
+                logger.info(f"  Raw questionnaire_status: {questionnaire_status}")
+                logger.info(f"  current_step extracted: {current_step} (type: {type(current_step)})")
+                logger.info(f"  answers count: {len(questionnaire_status.get('answers', {}))}")
+                logger.info(f"  questionnaire keys: {list(questionnaire_status.keys()) if questionnaire_status else 'None'}")
                 
                 # ENHANCED DETECTION: Check for existing questionnaire progress
                 has_existing_questionnaire = (
@@ -741,13 +753,13 @@ class FootballCoachBot:
                     current_question = await self.questionnaire_manager.get_current_question(user_id)
                     if current_question:
                         # COMPREHENSIVE DEBUG: Track branch execution
-                        user_logger.info(f"BRANCH: resume_step_gt_1 - User {user_id} | Step: {current_step} | Question: {current_question.get('step', 'unknown')}")
+                        logger.info(f"🎯 BRANCH: resume_step_gt_1 - User {user_id} | Step: {current_step} | Question: {current_question.get('step', 'unknown')}")
                         
                         # CRITICAL FIX: Set questionnaire_active flag so text input will be processed
                         if user_id not in context.user_data:
                             context.user_data[user_id] = {}
                         context.user_data[user_id]['questionnaire_active'] = True
-                        user_logger.info(f"SET questionnaire_active flag for User {user_id} resuming at step {current_step}")
+                        logger.info(f"✅ SET questionnaire_active flag - User {user_id} resuming at step {current_step}")
                         
                         # ROBUST FIX: Also set a timestamp to track when flag was set
                         context.user_data[user_id]['questionnaire_activated_at'] = datetime.now().isoformat()
@@ -755,15 +767,15 @@ class FootballCoachBot:
                         # ADDITIONAL FIX: Verify questionnaire data is immediately available
                         verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
                         verification_question = await self.questionnaire_manager.get_current_question(user_id)
-                        user_logger.info(f"QUESTIONNAIRE VERIFICATION for User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
+                        logger.info(f"🔧 QUESTIONNAIRE VERIFICATION - User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
                         
                         # If verification fails, force questionnaire readiness
                         if not verification_progress or not verification_question:
-                            error_logger.warning(f"QUESTIONNAIRE DATA NOT READY for User {user_id} - attempting to fix")
+                            logger.warning(f"⚠️ QUESTIONNAIRE DATA NOT READY - User {user_id} - attempting to fix")
                             # Force refresh questionnaire data
                             await self.questionnaire_manager.start_questionnaire(user_id)
                             verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
-                            user_logger.info(f"AFTER FIX for User {user_id}: progress available = {verification_progress is not None}")
+                            logger.info(f"🔧 AFTER FIX - User {user_id}: progress available = {verification_progress is not None}")
                         
                         # DEBUG: Log questionnaire resume activation
                         await admin_error_handler.log_questionnaire_flow_debug(
@@ -816,13 +828,13 @@ class FootballCoachBot:
                     first_question = self.questionnaire_manager.get_question(1, questionnaire_status.get('answers', {}))
                     if first_question:
                         # COMPREHENSIVE DEBUG: Track branch execution  
-                        user_logger.info(f"BRANCH: existing_step_1 - User {user_id} | Step: {current_step} | Question for step 1")
+                        logger.info(f"🎯 BRANCH: existing_step_1 - User {user_id} | Step: {current_step} | Question for step 1")
                         
                         # CRITICAL FIX: Set questionnaire_active flag so text input will be processed
                         if user_id not in context.user_data:
                             context.user_data[user_id] = {}
                         context.user_data[user_id]['questionnaire_active'] = True
-                        user_logger.info(f"SET questionnaire_active flag for User {user_id} in payment_approved flow (existing questionnaire at step 1)")
+                        logger.info(f"✅ SET questionnaire_active flag - User {user_id} in payment_approved flow (existing questionnaire at step 1)")
                         
                         # ROBUST FIX: Also set a timestamp to track when flag was set
                         context.user_data[user_id]['questionnaire_activated_at'] = datetime.now().isoformat()
@@ -830,7 +842,7 @@ class FootballCoachBot:
                         # ADDITIONAL FIX: Verify questionnaire data is immediately available for step 1
                         verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
                         verification_question = await self.questionnaire_manager.get_current_question(user_id)
-                        user_logger.info(f"QUESTIONNAIRE VERIFICATION STEP 1 for User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
+                        logger.info(f"🔧 QUESTIONNAIRE VERIFICATION STEP 1 - User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
                         
                         # DEBUG: Log comprehensive questionnaire activation state
                         await admin_error_handler.log_questionnaire_flow_debug(
@@ -852,7 +864,7 @@ class FootballCoachBot:
                         progress_text = "سوال 1 از 21"
                         # POTENTIAL FIX: If the question returned doesn't match step 1, use its actual progress
                         if first_question.get('progress_text'):
-                            error_logger.warning(f"PROGRESS TEXT MISMATCH for User {user_id} - Expected step 1, got: {first_question.get('progress_text')}")
+                            logger.warning(f"⚠️ PROGRESS TEXT MISMATCH - Expected step 1, got: {first_question.get('progress_text')}")
                             progress_text = first_question['progress_text']
                         
                         message = f"{progress_text}\n\n{first_question['text']}"
@@ -880,7 +892,7 @@ class FootballCoachBot:
                     first_question = self.questionnaire_manager.get_question(1, {})
                     if first_question:
                         # COMPREHENSIVE DEBUG: Track branch execution
-                        user_logger.info(f"BRANCH: fresh_start - User {user_id} | Starting fresh questionnaire")
+                        logger.info(f"🎯 BRANCH: fresh_start - User {user_id} | Starting fresh questionnaire")
                         
                         # Initialize questionnaire for user
                         await self.questionnaire_manager.start_questionnaire(user_id)
@@ -889,7 +901,7 @@ class FootballCoachBot:
                         if user_id not in context.user_data:
                             context.user_data[user_id] = {}
                         context.user_data[user_id]['questionnaire_active'] = True
-                        user_logger.info(f"SET questionnaire_active flag for User {user_id} in fresh questionnaire flow")
+                        logger.info(f"✅ SET questionnaire_active flag - User {user_id} in fresh questionnaire flow")
                         
                         # ROBUST FIX: Also set a timestamp to track when flag was set
                         context.user_data[user_id]['questionnaire_activated_at'] = datetime.now().isoformat()
@@ -897,7 +909,7 @@ class FootballCoachBot:
                         # ADDITIONAL FIX: Verify questionnaire data is immediately available after start
                         verification_progress = await self.questionnaire_manager.load_user_progress(user_id)
                         verification_question = await self.questionnaire_manager.get_current_question(user_id)
-                        user_logger.info(f"QUESTIONNAIRE VERIFICATION FRESH for User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
+                        logger.info(f"🔧 QUESTIONNAIRE VERIFICATION FRESH - User {user_id}: progress={verification_progress is not None}, question={verification_question is not None}")
                         
                         # DEBUG: Log comprehensive questionnaire activation state
                         await admin_error_handler.log_questionnaire_flow_debug(
@@ -920,7 +932,7 @@ class FootballCoachBot:
                         progress_text = "سوال 1 از 21"
                         # POTENTIAL FIX: If the question returned doesn't match step 1, use its actual progress  
                         if first_question.get('progress_text'):
-                            error_logger.warning(f"PROGRESS TEXT MISMATCH for User {user_id} - Expected step 1, got: {first_question.get('progress_text')}")
+                            logger.warning(f"⚠️ PROGRESS TEXT MISMATCH - Expected step 1, got: {first_question.get('progress_text')}")
                             progress_text = first_question['progress_text']
                             
                         message = f"{progress_text}\n\n{first_question['text']}"
@@ -1043,12 +1055,12 @@ class FootballCoachBot:
         user_id = user_data.get('user_id')
         
         # Debug logging
-        user_logger.debug(f"get_user_status for user {user_id}")
-        user_logger.debug(f"user_data: {user_data}")
-        payment_logger.debug(f"payment_pending dict has user: {user_id in self.payment_pending}")
+        logger.debug(f"🔍 get_user_status for user {user_id}")
+        logger.debug(f"📊 user_data: {user_data}")
+        logger.debug(f"💳 payment_pending dict has user: {user_id in self.payment_pending}")
         
         if not user_data or not user_data.get('started_bot'):
-            user_logger.debug(f"Status for {user_id}: new_user")
+            logger.debug(f"✅ Status: new_user")
             return 'new_user'
         
         # Check payment status from the payments table
@@ -1061,35 +1073,35 @@ class FootballCoachBot:
                 if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
                     user_payment = payment_data
         
-        payment_logger.debug(f"User {user_id} payment from DB: {user_payment}")
+        logger.debug(f"💰 user_payment from DB: {user_payment}")
         
         if user_payment:
             payment_status = user_payment.get('status')
-            payment_logger.debug(f"Payment status for user {user_id} from DB: {payment_status}")
+            logger.debug(f"💳 Payment status from DB: {payment_status}")
             if payment_status == 'pending_approval':  # Changed from 'pending' to 'pending_approval'
-                user_logger.debug(f"Status for {user_id}: payment_pending (from DB)")
+                logger.debug(f"✅ Status: payment_pending (from DB)")
                 return 'payment_pending'
             elif payment_status == 'approved':
-                user_logger.debug(f"Status for {user_id}: payment_approved (from DB)")
+                logger.debug(f"✅ Status: payment_approved (from DB)")
                 return 'payment_approved'
             # REMOVED: payment_rejected check - after /start, rejected payments don't affect status
         
         # Fallback to user_data payment_status (for backward compatibility)
         payment_status = user_data.get('payment_status')
-        payment_logger.debug(f"Fallback payment_status for user {user_id} from user_data: {payment_status}")
+        logger.debug(f"🔄 Fallback payment_status from user_data: {payment_status}")
         
         if payment_status == 'pending_approval':
-            user_logger.debug(f"Status for {user_id}: payment_pending (from user_data)")
+            logger.debug(f"✅ Status: payment_pending (from user_data)")
             return 'payment_pending'
         elif payment_status == 'approved':
-            user_logger.debug(f"Status for {user_id}: payment_approved (from user_data)")
+            logger.debug(f"✅ Status: payment_approved (from user_data)")
             return 'payment_approved'
         # REMOVED: payment_rejected check - after /start, rejected payments don't affect status
         elif user_data.get('course_selected') and not payment_status:
-            user_logger.debug(f"Status for {user_id}: course_selected (course: {user_data.get('course_selected')})")
+            logger.debug(f"✅ Status: course_selected (course: {user_data.get('course_selected')})")
             return 'course_selected'
         else:
-            user_logger.debug(f"Status for {user_id}: returning_user")
+            logger.debug(f"✅ Status: returning_user")
             return 'returning_user'
 
     async def get_user_purchased_courses(self, user_id: int) -> set:
@@ -1173,8 +1185,6 @@ class FootballCoachBot:
         query = update.callback_query
         await query.answer()
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         user_name = update.effective_user.first_name or "کاربر"
         
         # Clear all input states when navigating to main menu categories
@@ -1238,9 +1248,6 @@ class FootballCoachBot:
         """Handle detailed course information"""
         query = update.callback_query
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            await query.answer()
-            return
         
         # Clear all input states when navigating to course details (this includes navigation back from coupon panel)
         states_cleared = await admin_error_handler.clear_all_input_states(
@@ -1291,8 +1298,6 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         course_type = query.data.replace('coupon_', '')
         
         # Store course type for later use
@@ -1350,9 +1355,8 @@ class FootballCoachBot:
             )
             return
         
-        # SANITIZE and validate coupon
-        sanitized_code = sanitize_text(coupon_code).strip().upper()
-        is_valid, message, discount_percent = self.coupon_manager.validate_coupon(sanitized_code)
+        # Validate coupon
+        is_valid, message, discount_percent = self.coupon_manager.validate_coupon(coupon_code.strip().upper())
         
         if not is_valid:
             # Show error and offer to continue without coupon
@@ -1375,11 +1379,11 @@ class FootballCoachBot:
         
         # Calculate discounted price
         original_price = Config.PRICES.get(course_type, 0)
-        final_price, discount_amount = self.coupon_manager.calculate_discounted_price(original_price, sanitized_code)
+        final_price, discount_amount = self.coupon_manager.calculate_discounted_price(original_price, coupon_code.strip().upper())
         
         # Store coupon for this user
         self.user_coupon_codes[user_id] = {
-            'code': sanitized_code,
+            'code': coupon_code.strip().upper(),
             'discount_percent': discount_percent,
             'discount_amount': discount_amount,
             'course_type': course_type
@@ -1438,9 +1442,8 @@ class FootballCoachBot:
         target_user_id = admin_context.get('plan_user_id')  # For user-specific plans
         
         if upload_step == 'title':
-            sanitized_text = sanitize_text(text)
             # Store the title and ask for file
-            context.user_data[user_id]['plan_title'] = sanitized_text
+            context.user_data[user_id]['plan_title'] = text
             context.user_data[user_id]['plan_upload_step'] = 'file'
             
             course_names = {
@@ -1466,7 +1469,7 @@ class FootballCoachBot:
                     pass
             
             await update.message.reply_text(
-                f"✅ عنوان برنامه ثبت شد: {sanitized_text}{user_info}\n\n"
+                f"✅ عنوان برنامه ثبت شد: {text}{user_info}\n\n"
                 f"📁 حال لطفاً فایل برنامه {course_name} را ارسال کنید:\n\n"
                 f"📋 فرمت‌های قابل قبول:\n"
                 f"• فایل PDF\n"
@@ -1476,23 +1479,21 @@ class FootballCoachBot:
             )
             
         elif upload_step == 'description':
-            sanitized_text = sanitize_text(text)
             # Store the description and complete upload
-            context.user_data[user_id]['plan_description'] = sanitized_text
+            context.user_data[user_id]['plan_description'] = text
             
             # Log description received
             await admin_error_handler.log_plan_upload_workflow(
                 admin_id=user_id, 
                 step='description_received',
-                plan_data={'description': sanitized_text[:50] + '...' if len(sanitized_text) > 50 else sanitized_text}
+                plan_data={'description': text[:50] + '...' if len(text) > 50 else text}
             )
             
             await self.complete_plan_upload(update, context)
             
         elif upload_step == 'file' and text:
-            sanitized_text = sanitize_text(text)
             # Handle direct text input as plan content
-            context.user_data[user_id]['plan_content'] = sanitized_text
+            context.user_data[user_id]['plan_content'] = text
             context.user_data[user_id]['plan_content_type'] = 'text'
             context.user_data[user_id]['plan_upload_step'] = 'description'
             
@@ -1500,7 +1501,7 @@ class FootballCoachBot:
             await admin_error_handler.log_plan_upload_workflow(
                 admin_id=user_id, 
                 step='text_content_received',
-                plan_data={'content_type': 'text', 'content_length': len(sanitized_text)}
+                plan_data={'content_type': 'text', 'content_length': len(text)}
             )
             
             keyboard = [[InlineKeyboardButton("⏩ رد کردن توضیحات", callback_data='skip_plan_description')]]
@@ -1836,7 +1837,7 @@ class FootballCoachBot:
             
             return False
         except Exception as e:
-            error_logger.error(f"Error checking duplicate purchase for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error checking duplicate purchase: {e}")
             return False
 
     async def check_pending_purchase(self, user_id: int, course_type: str) -> bool:
@@ -1855,7 +1856,7 @@ class FootballCoachBot:
             
             return False
         except Exception as e:
-            error_logger.error(f"Error checking pending purchase for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error checking pending purchase: {e}")
             return False
 
     async def handle_csv_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1912,7 +1913,7 @@ class FootballCoachBot:
                 )
         
         except Exception as e:
-            error_logger.error(f"Error processing CSV import for admin {user_id}: {e}", exc_info=True)
+            logger.error(f"Error processing CSV import: {e}")
             await update.message.reply_text(f"❌ خطا در پردازش فایل: {str(e)}")
 
     async def import_users_csv(self, update: Update, csv_content: str) -> None:
@@ -2174,7 +2175,7 @@ class FootballCoachBot:
         context.user_data[user_id]['awaiting_payment_receipt'] = True
         context.user_data[user_id]['payment_course'] = course_type
         
-        payment_logger.info(f"User {user_id} entering payment flow for course: {course_type}")
+        logger.info(f"💳 User {user_id} entering payment flow for course: {course_type}")
         
         # Format prices properly
         final_price_text = Config.format_price(final_price)
@@ -2253,11 +2254,11 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
-        user_logger.debug(f"Photo received from user {user_id} ({user_name})")
+        logger.debug(f"📷 PHOTO ROUTER - Photo received from user {user_id} ({user_name})")
         
         # First, validate that this is actually a photo message
         if not update.message or not update.message.photo:
-            error_logger.warning(f"Non-photo message received from user {user_id}")
+            logger.warning(f"⚠️ Non-photo message received from user {user_id}")
             await update.message.reply_text(
                 "❌ فقط تصاویر قابل پردازش هستند!\n\n"
                 "لطفاً یک عکس ارسال کنید (نه فایل یا متن)."
@@ -2268,7 +2269,7 @@ class FootballCoachBot:
         if await self.admin_panel.admin_manager.is_admin(user_id):
             admin_context = context.user_data.get(user_id, {})
             if admin_context.get('uploading_plan') or admin_context.get('uploading_user_plan'):
-                admin_logger.debug(f"Admin {user_id} uploading plan photo")
+                logger.debug(f"🔧 PHOTO ROUTER - Admin {user_id} uploading plan")
                 if await self.handle_plan_upload_photo(update, context):
                     return
         
@@ -2277,7 +2278,7 @@ class FootballCoachBot:
         payment_status = user_data.get('payment_status')
         user_context = context.user_data.get(user_id, {})
         
-        user_logger.debug(f"PHOTO DEBUG for User {user_id} | Payment: {payment_status} | Active: {user_context.get('questionnaire_active', False)}")
+        logger.debug(f"🔍 PHOTO DEBUG - User {user_id} | Payment: {payment_status} | Active: {user_context.get('questionnaire_active', False)}")
         
         # ENHANCED QUESTIONNAIRE DETECTION: Check multiple conditions
         in_questionnaire_mode = False
@@ -2285,7 +2286,7 @@ class FootballCoachBot:
         # Method 1: Check if questionnaire_active flag is set
         if user_context.get('questionnaire_active', False):
             in_questionnaire_mode = True
-            user_logger.debug(f"QUESTIONNAIRE MODE for User {user_id} detected via active flag")
+            logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via active flag")
         
         # Method 2: Check if user has approved payment and unfinished questionnaire
         elif payment_status == 'approved':
@@ -2295,31 +2296,31 @@ class FootballCoachBot:
                 not questionnaire_progress.get("completed", False) and 
                 questionnaire_progress.get("current_step", 0) > 0):
                 in_questionnaire_mode = True
-                user_logger.debug(f"QUESTIONNAIRE MODE for User {user_id} detected via payment+progress")
+                logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via payment+progress")
                 
                 # AUTO-SET questionnaire_active flag for consistency
                 if user_id not in context.user_data:
                     context.user_data[user_id] = {}
                 context.user_data[user_id]['questionnaire_active'] = True
-                user_logger.debug(f"AUTO-SET questionnaire_active flag for user {user_id}")
+                logger.debug(f"🔧 AUTO-SET questionnaire_active flag for user {user_id}")
         
         if in_questionnaire_mode:
             current_question = await self.questionnaire_manager.get_current_question(user_id)
             
-            user_logger.debug(f"PHOTO DEBUG for User {user_id} | Current question: {current_question is not None}")
+            logger.debug(f"🔍 PHOTO DEBUG - User {user_id} | Current question: {current_question is not None}")
             if current_question:
-                user_logger.debug(f"PHOTO DEBUG for User {user_id} | Question type: {current_question.get('type')} | Step: {current_question.get('step')}")
+                logger.debug(f"🔍 PHOTO DEBUG - User {user_id} | Question type: {current_question.get('type')} | Step: {current_question.get('step')}")
             
             if current_question:
                 question_type = current_question.get("type")
                 
                 if question_type == "photo":
-                    user_logger.debug(f"PHOTO ROUTER - User {user_id} in questionnaire photo step")
+                    logger.debug(f"📝 PHOTO ROUTER - User {user_id} in questionnaire photo step")
                     await self.handle_questionnaire_photo(update, context)
                     return
                 else:
                     # User sent photo but different input type is expected (text, number, etc.)
-                    user_logger.debug(f"PHOTO ROUTER - User {user_id} sent photo for {question_type} question - showing error")
+                    logger.debug(f"❌ PHOTO ROUTER - User {user_id} sent photo for {question_type} question - showing error")
                     from input_validator import input_validator
                     
                     is_valid = await input_validator.validate_and_reject_wrong_input_type(
@@ -2329,7 +2330,7 @@ class FootballCoachBot:
         
         # PRIORITY 3: Check if user is waiting for coupon code (not photo)
         if user_context.get('waiting_for_coupon'):
-            user_logger.debug(f"PHOTO ROUTER - User {user_id} sent photo while waiting for coupon - showing error")
+            logger.debug(f"💰 PHOTO ROUTER - User {user_id} sent photo while waiting for coupon - showing error")
             from input_validator import input_validator
             
             await input_validator.validate_and_reject_wrong_input_type(
@@ -2346,13 +2347,13 @@ class FootballCoachBot:
         )
         
         if actively_in_payment_flow:
-            payment_logger.debug(f"PHOTO ROUTER - User {user_id} in payment flow")
+            logger.debug(f"💳 PHOTO ROUTER - User {user_id} in payment flow")
             await self.handle_payment_receipt(update, context)
             return
         
         # FALLBACK: Photo sent outside valid context - REMAIN SILENT
         # User requested complete silence when no input is expected (like in main menu)
-        user_logger.debug(f"PHOTO ROUTER - User {user_id} sent photo outside valid context - remaining silent")
+        logger.debug(f"🔇 PHOTO ROUTER - User {user_id} sent photo outside valid context - remaining silent")
         # No message sent - complete silence as requested
 
     async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2360,7 +2361,7 @@ class FootballCoachBot:
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name or "کاربر"
         
-        payment_logger.debug(f"Processing payment receipt from user {user_id} ({user_name})")
+        logger.debug(f"📋 Processing payment receipt from user {user_id} ({user_name})")
         
         # At this point, the photo router has already validated this is a payment receipt context
         # So we can proceed directly with payment processing
@@ -2381,7 +2382,7 @@ class FootballCoachBot:
         payment_status = user_data.get('payment_status')
         
         if payment_status == 'pending_approval':
-            payment_logger.warning(f"User {user_id} sent duplicate receipt - already pending")
+            logger.warning(f"⚠️ User {user_id} sent duplicate receipt - already pending")
             await update.message.reply_text(
                 "✅ فیش واریز شما قبلاً دریافت شده است!\n\n"
                 "⏳ در حال بررسی توسط ادمین...\n"
@@ -2439,7 +2440,7 @@ class FootballCoachBot:
             # Get course details with safe lookup
             course_details = Config.COURSE_DETAILS.get(course_selected, {})
             if not course_details or not isinstance(course_details, dict):
-                error_logger.error(f"Missing or invalid course details for {course_selected}")
+                logger.error(f"Missing or invalid course details for {course_selected}")
                 course_title = f"دوره: {course_selected}"
             else:
                 course_title = course_details.get('title', f"دوره: {course_selected}")
@@ -2467,7 +2468,7 @@ class FootballCoachBot:
             payment_id = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             # Log payment receipt submission
-            log_payment_action(user_id, "submitted payment receipt", price, course_selected)
+            log_payment_action(user_id, user_name, f"submitted payment receipt for course: {course_selected}")
             
             # Save payment record with coupon info if applicable
             payment_data = {
@@ -2508,7 +2509,7 @@ class FootballCoachBot:
             # If this is their first course purchase, set as main course
             user_data = await self.data_manager.get_user_data(user_id)
             if not user_data:
-                error_logger.error(f"Failed to get user data for user {user_id}")
+                logger.error(f"Failed to get user data for user {user_id}")
                 user_data = {}
             
             if not user_data.get('course_selected'):
@@ -2523,7 +2524,7 @@ class FootballCoachBot:
                 context.user_data[user_id].pop('awaiting_payment_receipt', None)  # CLEAR PAYMENT STATE
                 context.user_data[user_id].pop('payment_course', None)
                 
-            payment_logger.info(f"Payment receipt processed for user {user_id} - PAYMENT FLOW STATE CLEARED")
+            logger.info(f"✅ Payment receipt processed for user {user_id} - PAYMENT FLOW STATE CLEARED")
             
             # Show submission count to user (with safe calculation)
             current_submission_count = receipt_status.get('submission_count', 0) if receipt_status else 0
@@ -2545,7 +2546,7 @@ class FootballCoachBot:
             await self.notify_admins_about_payment(update, context, photo, course_title, price, user_id)
                 
         except Exception as e:
-            error_logger.error(f"Error processing payment receipt for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error processing payment receipt: {e}")
             # Use error handler for better error reporting
             await admin_error_handler.handle_admin_error(
                 update, context, e, "process_new_course_payment", user_id
@@ -2594,7 +2595,7 @@ class FootballCoachBot:
             }
             
         except Exception as e:
-            error_logger.error(f"Error checking receipt limits for user {user_id}, course {course_code}: {e}", exc_info=True)
+            logger.error(f"Error checking receipt limits for user {user_id}, course {course_code}: {e}")
             # Allow submission if there's an error (fail safe)
             return {
                 'allowed': True,
@@ -2607,7 +2608,7 @@ class FootballCoachBot:
         try:
             user_data = await self.data_manager.get_user_data(user_id)
             if not user_data:
-                error_logger.error(f"Failed to get user data for user {user_id} in increment_receipt_submission_count")
+                logger.error(f"Failed to get user data for user {user_id} in increment_receipt_submission_count")
                 user_data = {}
             
             receipt_attempts = user_data.get('receipt_attempts', {})
@@ -2618,17 +2619,17 @@ class FootballCoachBot:
             
             await self.data_manager.save_user_data(user_id, {'receipt_attempts': receipt_attempts})
             
-            payment_logger.info(f"User {user_id} receipt attempt #{receipt_attempts[course_code]} for course {course_code}")
+            logger.info(f"User {user_id} receipt attempt #{receipt_attempts[course_code]} for course {course_code}")
             
         except Exception as e:
-            error_logger.error(f"Error incrementing receipt count for user {user_id}, course {course_code}: {e}", exc_info=True)
+            logger.error(f"Error incrementing receipt count for user {user_id}, course {course_code}: {e}")
 
     async def notify_admins_about_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
                                         photo, course_title: str, price: int, user_id: int):
         """Notify admins about payment with timeout protection"""
         admin_ids = Config.get_admin_ids()
         if not admin_ids:
-            error_logger.warning("No admin IDs found for payment notification")
+            logger.warning("No admin IDs found for payment notification")
             return
         
         # Get receipt attempt info
@@ -2677,17 +2678,17 @@ class FootballCoachBot:
                 sent_count += 1
                 
             except asyncio.TimeoutError:
-                error_logger.warning(f"Timeout sending payment notification to admin {admin_id}")
+                logger.warning(f"Timeout sending payment notification to admin {admin_id}")
                 failed_admins.append(admin_id)
                 
             except Exception as e:
-                error_logger.warning(f"Failed to send payment notification to admin {admin_id}: {e}")
+                logger.warning(f"Failed to send payment notification to admin {admin_id}: {e}")
                 failed_admins.append(admin_id)
         
-        admin_logger.info(f"Payment notification sent to {sent_count}/{len(admin_ids)} admins")
+        logger.info(f"Payment notification sent to {sent_count}/{len(admin_ids)} admins")
         
         if failed_admins:
-            error_logger.warning(f"Failed to notify admins: {failed_admins}")
+            logger.warning(f"Failed to notify admins: {failed_admins}")
             # Try to send a fallback text message to failed admins
             for admin_id in failed_admins:
                 try:
@@ -2700,7 +2701,7 @@ class FootballCoachBot:
                         timeout=5.0
                     )
                 except Exception as e:
-                    error_logger.error(f"Failed to send fallback notification to admin {admin_id}: {e}", exc_info=True)
+                    logger.error(f"Failed to send fallback notification to admin {admin_id}: {e}")
 
     async def handle_questionnaire_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle photo submission for questionnaire questions"""
@@ -2754,10 +2755,17 @@ class FootballCoachBot:
                 await update.message.reply_text("❌ خطا در پردازش عکس!")
                 
         except Exception as e:
-            error_logger.error(f"Error processing questionnaire photo for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error processing questionnaire photo for user {user_id}: {e}")
             await update.message.reply_text(
                 "❌ خطا در پردازش تصویر!\n\n"
                 "لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."
+            )
+            logger.error(f"Error processing questionnaire photo: {e}")
+            await update.message.reply_text(
+                "❌ خطا در پردازش تصویر!\n\n"
+                "لطفاً دوباره تلاش کنید.\n"
+                "اگر مشکل ادامه داشت، با پشتیبانی تماس بگیرید.\n\n"
+                f"کد خطا: {str(e)[:50]}"
             )
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2834,7 +2842,7 @@ class FootballCoachBot:
                                 await update.message.reply_text(result.get("message", "خطا در پردازش فایل"))
                                 
                         except Exception as e:
-                            error_logger.error(f"Error processing document for user {user_id}: {e}", exc_info=True)
+                            logger.error(f"Error processing document for user {user_id}: {e}")
                             await update.message.reply_text(
                                 "❌ خطا در پردازش فایل!\n\n"
                                 "می‌توانید متن پاسخ خود را بنویسید یا فایل PDF دیگری ارسال کنید."
@@ -2872,7 +2880,7 @@ class FootballCoachBot:
         payment_status = user_data.get('payment_status')
         user_context = context.user_data.get(user_id, {})
         
-        user_logger.debug(f"UNSUPPORTED FILE DEBUG for User {user_id} | Payment: {payment_status} | Active: {user_context.get('questionnaire_active', False)}")
+        logger.debug(f"🔍 UNSUPPORTED FILE DEBUG - User {user_id} | Payment: {payment_status} | Active: {user_context.get('questionnaire_active', False)}")
         
         # Check if user is in questionnaire mode using enhanced detection
         in_questionnaire_mode = False
@@ -2880,7 +2888,7 @@ class FootballCoachBot:
         # Method 1: Check if questionnaire_active flag is set
         if user_context.get('questionnaire_active', False):
             in_questionnaire_mode = True
-            user_logger.debug(f"QUESTIONNAIRE MODE for User {user_id} detected via active flag")
+            logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via active flag")
         
         # Method 2: Check if user has approved payment and unfinished questionnaire
         elif payment_status == 'approved':
@@ -2890,13 +2898,13 @@ class FootballCoachBot:
                 not questionnaire_progress.get("completed", False) and 
                 questionnaire_progress.get("current_step", 0) > 0):
                 in_questionnaire_mode = True
-                user_logger.debug(f"QUESTIONNAIRE MODE for User {user_id} detected via payment+progress")
+                logger.debug(f"🎯 QUESTIONNAIRE MODE - User {user_id} detected via payment+progress")
                 
                 # AUTO-SET questionnaire_active flag for consistency
                 if user_id not in context.user_data:
                     context.user_data[user_id] = {}
                 context.user_data[user_id]['questionnaire_active'] = True
-                user_logger.debug(f"AUTO-SET questionnaire_active flag for user {user_id}")
+                logger.debug(f"🔧 AUTO-SET questionnaire_active flag for user {user_id}")
         
         if in_questionnaire_mode:
             current_question = await self.questionnaire_manager.get_current_question(user_id)
@@ -2904,7 +2912,7 @@ class FootballCoachBot:
             if current_question:
                 question_type = current_question.get("type")
                 
-                user_logger.debug(f"UNSUPPORTED FILE - User {user_id} sent unsupported file for {question_type} question - showing error")
+                logger.debug(f"❌ UNSUPPORTED FILE - User {user_id} sent unsupported file for {question_type} question - showing error")
                 
                 # UNIFIED INPUT TYPE VALIDATION for unsupported files
                 from input_validator import input_validator
@@ -2923,28 +2931,27 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         admin_name = update.effective_user.first_name or "Unknown Admin"
         
         # Log admin action attempt
-        log_admin_action(user_id, "attempted payment approval", f"Data: {query.data}")
+        logger.info(f"🔧 Payment approval attempt by admin {user_id} ({admin_name})")
+        admin_logger.info(f"Payment approval attempt by admin {user_id} ({admin_name}) - Data: {query.data}")
         
         # Check if user is admin
         is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
         
         if not is_admin:
-            admin_logger.warning(f"Non-admin user {user_id} ({admin_name}) attempted payment approval")
-            log_admin_action(user_id, "attempted payment approval - BLOCKED (not an admin)")
+            logger.warning(f"⚠️ Non-admin user {user_id} ({admin_name}) attempted payment approval")
+            admin_logger.warning(f"Non-admin user {user_id} ({admin_name}) attempted payment approval - BLOCKED")
             await query.answer("❌ شما دسترسی ادمین ندارید.", show_alert=True)
             return
         
-        admin_logger.info(f"Admin access confirmed for user {user_id} ({admin_name})")
+        logger.info(f"✅ Admin access confirmed for user {user_id} ({admin_name})")
         
         # Handle user profile viewing
         if query.data.startswith('view_user_'):
             target_user_id = int(query.data.replace('view_user_', ''))
-            log_admin_action(user_id, f"viewing profile of user {target_user_id}")
+            admin_logger.info(f"Admin {user_id} ({admin_name}) viewing profile of user {target_user_id}")
             await self.show_user_profile(query, target_user_id)
             return
         
@@ -2993,7 +3000,11 @@ class FootballCoachBot:
             course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
             price = user_payment.get('price', 0)
             
-            log_payment_action(target_user_id, "PAYMENT APPROVED", price, course_type, admin_id=user_id)
+            admin_logger.info(f"💳 PAYMENT APPROVED by admin {user_id} ({admin_name})")
+            admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
+            admin_logger.info(f"   Course: {course_title} ({course_type})")
+            admin_logger.info(f"   Amount: {Config.format_price(price)}")
+            admin_logger.info(f"   Payment ID: {payment_id}")
             
             # Update payment status in payments table
             user_payment['status'] = 'approved'
@@ -3002,7 +3013,7 @@ class FootballCoachBot:
             payments_data[payment_id] = user_payment
             await self.data_manager.save_data('payments', payments_data)
             
-            payment_logger.info(f"Payment data updated for user {target_user_id}")
+            logger.info(f"✅ Payment data updated for user {target_user_id}")
             
             # Update user data
             await self.data_manager.save_user_data(target_user_id, {
@@ -3012,7 +3023,7 @@ class FootballCoachBot:
                 'payment_status': 'approved'
             })
             
-            user_logger.info(f"User data updated for user {target_user_id} after payment approval")
+            logger.info(f"✅ User data updated for user {target_user_id}")
             
             # Update statistics
             await self.data_manager.update_statistics('total_payments')
@@ -3024,17 +3035,18 @@ class FootballCoachBot:
                 del self.payment_pending[target_user_id]
             
             # Notify user and start questionnaire automatically
-            log_admin_action(user_id, "Starting automatic questionnaire notification", f"User: {target_user_id}")
+            logger.info(f"🚀 Starting automatic questionnaire notification for user {target_user_id}")
+            admin_logger.info(f"🚀 Sending automatic questionnaire to user {target_user_id}")
             
             notification_sent = False
             notification_error = None
             
             try:
                 # Get first question to start questionnaire immediately
-                user_logger.debug(f"Starting questionnaire for user {target_user_id}")
+                logger.debug(f"📝 Starting questionnaire for user {target_user_id}")
                 await self.questionnaire_manager.start_questionnaire(target_user_id)
                 
-                user_logger.debug(f"Getting first question for user {target_user_id}")
+                logger.debug(f"📋 Getting first question for user {target_user_id}")
                 first_question = await self.questionnaire_manager.get_current_question(target_user_id)
                 
                 if first_question:
@@ -3050,7 +3062,8 @@ class FootballCoachBot:
                     keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     
-                    log_admin_action(user_id, "Sending questionnaire with first question", f"User: {target_user_id}")
+                    logger.info(f"📤 Sending questionnaire message to user {target_user_id}")
+                    admin_logger.info(f"📤 Sending questionnaire with first question to user {target_user_id}")
                     
                     await context.bot.send_message(
                         chat_id=target_user_id,
@@ -3059,11 +3072,13 @@ class FootballCoachBot:
                     )
                     
                     notification_sent = True
-                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received questionnaire message")
+                    logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id} - First question delivered")
                     
                 else:
                     # Fallback to button if question not found
-                    error_logger.warning(f"First question not found for user {target_user_id}, using fallback button")
+                    logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
+                    admin_logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
                     
                     keyboard = [[InlineKeyboardButton("🎯 شروع پرسشنامه", callback_data='start_questionnaire')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -3075,15 +3090,18 @@ class FootballCoachBot:
                     )
                     
                     notification_sent = True
-                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received fallback questionnaire message")
+                    logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id} - Button to start questionnaire")
                 
             except Exception as e:
                 notification_error = str(e)
-                error_logger.error(f"FAILED to send questionnaire message to user {target_user_id}: {e}", exc_info=True)
+                logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
+                admin_logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
                 
                 # Try to at least notify them of approval
                 try:
-                    log_admin_action(user_id, "Attempting fallback notification", f"User: {target_user_id}")
+                    logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
+                    admin_logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
                     
                     await context.bot.send_message(
                         chat_id=target_user_id,
@@ -3091,17 +3109,19 @@ class FootballCoachBot:
                     )
                     
                     notification_sent = True
-                    log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received fallback approval notification")
+                    logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
                     
                 except Exception as e2:
                     notification_error = f"{e} | Fallback also failed: {e2}"
-                    error_logger.error(f"EVEN FALLBACK FAILED for user {target_user_id}: {e2}", exc_info=True)
+                    logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
+                    admin_logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
             
             # Final notification status log
             if notification_sent:
-                log_admin_action(user_id, "PAYMENT APPROVAL COMPLETE", f"User {target_user_id} notified successfully")
+                admin_logger.info(f"🎉 PAYMENT APPROVAL COMPLETE: User {target_user_id} notified successfully")
             else:
-                log_admin_action(user_id, "PAYMENT APPROVAL INCOMPLETE", f"User {target_user_id} NOT notified - Error: {notification_error}")
+                admin_logger.error(f"🚨 PAYMENT APPROVAL INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
             
             # Update admin message
             updated_message = f"""✅ پرداخت تایید شد:
@@ -3152,7 +3172,10 @@ class FootballCoachBot:
             course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
             
             # Log the rejection action
-            log_payment_action(target_user_id, "PAYMENT REJECTED", admin_id=user_id)
+            admin_logger.info(f"❌ PAYMENT REJECTED by admin {user_id} ({admin_name})")
+            admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
+            admin_logger.info(f"   Course: {course_title} ({course_type})")
+            admin_logger.info(f"   Payment ID: {payment_id}")
             
             # Update payment status in payments table
             user_payment['status'] = 'rejected'
@@ -3166,7 +3189,7 @@ class FootballCoachBot:
                 'payment_status': 'rejected'
             })
             
-            payment_logger.info(f"Payment rejected for user {target_user_id}")
+            logger.info(f"✅ Payment rejected for user {target_user_id}")
             
             # Remove from pending payments
             if target_user_id in self.payment_pending:
@@ -3177,7 +3200,8 @@ class FootballCoachBot:
             notification_error = None
             
             try:
-                log_admin_action(user_id, "Sending rejection notification", f"User: {target_user_id}")
+                logger.info(f"📤 Sending rejection notification to user {target_user_id}")
+                admin_logger.info(f"📤 Sending rejection notification to user {target_user_id}")
                 
                 await context.bot.send_message(
                     chat_id=target_user_id,
@@ -3185,17 +3209,19 @@ class FootballCoachBot:
                 )
                 
                 notification_sent = True
-                log_user_action(target_user_id, user_data.get('name', 'Unknown'), "Received rejection notification")
+                logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
+                admin_logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
                 
             except Exception as e:
                 notification_error = str(e)
-                error_logger.error(f"FAILED to notify user {target_user_id} about rejection: {e}", exc_info=True)
+                logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
+                admin_logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
             
             # Final notification status log
             if notification_sent:
-                log_admin_action(user_id, "PAYMENT REJECTION COMPLETE", f"User {target_user_id} notified successfully")
+                admin_logger.info(f"🎉 PAYMENT REJECTION COMPLETE: User {target_user_id} notified successfully")
             else:
-                log_admin_action(user_id, "PAYMENT REJECTION INCOMPLETE", f"User {target_user_id} NOT notified - Error: {notification_error}")
+                admin_logger.error(f"🚨 PAYMENT REJECTION INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
             
             # Update admin message
             updated_message = f"""❌ پرداخت رد شد:
@@ -3286,10 +3312,13 @@ class FootballCoachBot:
             await query.edit_message_text(message, reply_markup=reply_markup)
             
             # Log admin action
-            log_admin_action(admin_id, f"requested_extra_receipt_options", f"Target user: {target_user_id}, Course: {course_code}")
+            await admin_error_handler.log_admin_action(
+                admin_id, f"requested_extra_receipt_options", 
+                {"target_user": target_user_id, "course": course_code}
+            )
             
         except Exception as e:
-            error_logger.error(f"Error in handle_allow_extra_receipt: {e}", exc_info=True)
+            logger.error(f"Error in handle_allow_extra_receipt: {e}")
             await admin_error_handler.handle_admin_error(
                 query, context, e, "handle_allow_extra_receipt", admin_id
             )
@@ -3300,8 +3329,6 @@ class FootballCoachBot:
         await query.answer()
         
         admin_id = update.effective_user.id
-        if await self.check_cooldown(admin_id):
-            return
         admin_name = update.effective_user.first_name or "ادمین"
         
         # Check admin access
@@ -3368,7 +3395,7 @@ class FootballCoachBot:
                 await context.bot.send_message(chat_id=target_user_id, text=user_message)
                 user_notified = "✅ موفق"
             except Exception as e:
-                error_logger.error(f"Failed to notify user {target_user_id} about extra receipt: {e}", exc_info=True)
+                logger.error(f"Failed to notify user {target_user_id} about extra receipt: {e}")
                 user_notified = "❌ ناموفق"
             
             # Update admin message
@@ -3391,12 +3418,20 @@ class FootballCoachBot:
             await query.edit_message_text(success_message, reply_markup=reply_markup)
             
             # Log admin action
-            log_admin_action(admin_id, "granted_extra_receipt", f"Target user: {target_user_id}, Course: {course_code}, Extra attempts: {extra_attempts}, New total: {new_max}")
+            await admin_error_handler.log_admin_action(
+                admin_id, f"granted_extra_receipt", 
+                {
+                    "target_user": target_user_id, 
+                    "course": course_code,
+                    "extra_attempts": extra_attempts,
+                    "new_total": new_max
+                }
+            )
             
             logger.info(f"Admin {admin_id} granted {attempts_text} extra receipt attempts to user {target_user_id} for course {course_code}")
             
         except Exception as e:
-            error_logger.error(f"Error in handle_grant_receipt_approval: {e}", exc_info=True)
+            logger.error(f"Error in handle_grant_receipt_approval: {e}")
             await admin_error_handler.handle_admin_error(
                 update, context, e, "handle_grant_receipt_approval", admin_id
             )
@@ -3548,8 +3583,6 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         answer = query.data.replace('q_answer_', '')
         
         # Submit the answer
@@ -3796,16 +3829,14 @@ class FootballCoachBot:
         # Process questionnaire answer - reuse existing logic
         current_step = current_question.get('step', 1)
         
-        # SANITIZE and validate the answer
-        sanitized_input = sanitize_text(text_input)
-
-        is_valid, error_msg = self.questionnaire_manager.validate_answer(current_step, sanitized_input)
+        # Validate and submit the answer
+        is_valid, error_msg = self.questionnaire_manager.validate_answer(current_step, text_input)
         if not is_valid:
             await update.message.reply_text(f"❌ {error_msg}")
             return
         
-        # Submit the SANITIZED answer
-        result = await self.questionnaire_manager.process_answer(user_id, sanitized_input)
+        # Submit the answer
+        result = await self.questionnaire_manager.process_answer(user_id, text_input)
         
         if result["status"] == "error":
             await update.message.reply_text(f"❌ {result['message']}")
@@ -3838,8 +3869,7 @@ class FootballCoachBot:
     async def _handle_edit_mode_text_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text_input: str) -> None:
         """Handle text input during questionnaire edit mode"""
         user_id = update.effective_user.id
-        sanitized_input = sanitize_text(text_input)
-        await self.questionnaire_manager.update_answer_in_edit_mode(update, context, user_id, sanitized_input)
+        await self.questionnaire_manager.update_answer_in_edit_mode(update, context, user_id, text_input)
 
     async def handle_questionnaire_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -3869,7 +3899,9 @@ class FootballCoachBot:
             logger.info(f"🧹 CLEARED QUESTIONNAIRE_ACTIVE FLAG - User {user_id} on completion")
         
         # Log questionnaire completion
-        log_user_action(user_id, update.effective_user.first_name, "questionnaire completed")
+        admin_error_handler.admin_logger.info(
+            f"QUESTIONNAIRE COMPLETED - User {user_id} | States cleared: {states_cleared}"
+        )
         
         # Get course type from pending payment
         course_type = self.payment_pending.get(user_id)
@@ -3899,7 +3931,9 @@ class FootballCoachBot:
         )
         
         # Log questionnaire completion
-        log_user_action(user_id, update.effective_user.first_name, "questionnaire completed (from text)")
+        admin_error_handler.admin_logger.info(
+            f"QUESTIONNAIRE COMPLETED (TEXT) - User {user_id} | States cleared: {states_cleared}"
+        )
         
         # Get course type from pending payment
         course_type = self.payment_pending.get(user_id)
@@ -3923,9 +3957,6 @@ class FootballCoachBot:
         """Start questionnaire directly from callback"""
         query = update.callback_query
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            await query.answer()
-            return
         
         # CRITICAL: Use get_user_status to check payments table, not user data
         user_data = await self.data_manager.get_user_data(user_id)
@@ -3977,8 +4008,6 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         user_data = await self.data_manager.get_user_data(user_id)
         user_data['user_id'] = user_id  # Ensure user_id is set
         user_name = user_data.get('name', update.effective_user.first_name or 'کاربر')
@@ -3993,8 +4022,6 @@ class FootballCoachBot:
             await query.answer()
 
             user_id = update.effective_user.id
-            if await self.check_cooldown(user_id):
-                return
             
             # COMPREHENSIVE STATE CLEARING - clear EVERYTHING except questionnaire
             states_cleared = await admin_error_handler.clear_all_input_states(
@@ -4028,7 +4055,9 @@ class FootballCoachBot:
                 states_cleared.extend(admin_states_cleared)
             
             # Log comprehensive cleanup (questionnaire preserved)
-            log_user_action(user_id, update.effective_user.first_name, "back to user menu", f"Total states cleared: {len(states_cleared)} | Questionnaire preserved")
+            admin_error_handler.admin_logger.info(
+                f"BACK TO MENU CLEANUP - User {user_id} | Total states cleared: {len(states_cleared)} | Questionnaire preserved"
+            )
             
             user_data = await self.data_manager.get_user_data(user_id)
             user_data['user_id'] = user_id  # Ensure user_id is set
@@ -4042,9 +4071,11 @@ class FootballCoachBot:
             user_id = update.effective_user.id if update.effective_user else "unknown"
             
             # Log the specific error for debugging
-            logger.error(f"ERROR in back_to_user_menu for user {user_id}: {e}")
+            admin_error_handler.admin_logger.error(
+                f"ERROR in back_to_user_menu for user {user_id}: {e}"
+            )
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            admin_error_handler.admin_logger.error(f"Traceback: {traceback.format_exc()}")
             
             # Try to send a helpful error message with more context
             error_context = ""
@@ -4079,8 +4110,6 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         
         # COMPREHENSIVE state clearing - clear ALL input states
         states_cleared = await admin_error_handler.clear_all_input_states(
@@ -4093,7 +4122,9 @@ class FootballCoachBot:
             states_cleared.append("payment_pending")
         
         # Log navigation
-        log_user_action(user_id, update.effective_user.first_name, "back to course selection", f"States cleared: {len(states_cleared)}")
+        admin_error_handler.admin_logger.info(
+            f"COURSE SELECTION NAVIGATION - User {user_id} | States cleared: {len(states_cleared)}"
+        )
         
         # Show the course selection interface
         await self.start_new_course_selection(update, context)
@@ -4104,8 +4135,6 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         
         # COMPREHENSIVE state clearing - clear ALL input states
         states_cleared = await admin_error_handler.clear_all_input_states(
@@ -4118,7 +4147,9 @@ class FootballCoachBot:
             states_cleared.append("payment_pending")
         
         # Log navigation
-        log_user_action(user_id, update.effective_user.first_name, "back to category", f"States cleared: {len(states_cleared)}")
+        admin_error_handler.admin_logger.info(
+            f"CATEGORY NAVIGATION - User {user_id} | States cleared: {len(states_cleared)}"
+        )
         
         # Extract category from callback data
         if query.data == 'back_to_online':
@@ -4610,10 +4641,7 @@ class FootballCoachBot:
     async def handle_edit_navigation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle navigation in edit mode (prev/next buttons)"""
         query = update.callback_query
-        await query.answer()
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         action = query.data  # 'edit_prev' or 'edit_next'
         
         try:
@@ -4648,9 +4676,6 @@ class FootballCoachBot:
         """Finish questionnaire editing and return to main menu"""
         query = update.callback_query
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            await query.answer()
-            return
         
         try:
             # Finish edit mode
@@ -4682,7 +4707,7 @@ class FootballCoachBot:
             
             return user_courses
         except Exception as e:
-            error_logger.error(f"Error getting user approved courses for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error getting user approved courses: {e}")
             return []
 
     async def show_course_selection_for_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, courses: list) -> None:
@@ -4706,7 +4731,7 @@ class FootballCoachBot:
             await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
             
         except Exception as e:
-            error_logger.error(f"Error in show_course_selection_for_program for user {update.effective_user.id}: {e}", exc_info=True)
+            logger.error(f"Error in show_course_selection_for_program: {e}")
 
     async def show_training_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict = None, course_code: str = None) -> None:
         """Show user's training program - displays all purchased courses and their assigned main plans"""
@@ -4788,7 +4813,7 @@ class FootballCoachBot:
             await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
             
         except Exception as e:
-            error_logger.error(f"Error in show_training_program for user {user_id}: {e}", exc_info=True)
+            logging.error(f"Error in show_training_program: {e}")
             await admin_error_handler.handle_admin_error(
                 update, context, e, "show_training_program", update.effective_user.id
             )
@@ -4862,7 +4887,7 @@ class FootballCoachBot:
             await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
             
         except Exception as e:
-            error_logger.error(f"Error in show_single_course_program for user {user_id}: {e}", exc_info=True)
+            logging.error(f"Error in show_single_course_program: {e}")
             await admin_error_handler.handle_admin_error(
                 update, context, e, "show_single_course_program", update.effective_user.id
             )
@@ -4873,7 +4898,7 @@ class FootballCoachBot:
             # Load main plan assignments
             main_plans_file = 'admin_data/main_plan_assignments.json'
             if not os.path.exists(main_plans_file):
-                user_logger.debug(f"Main plans file not found: {main_plans_file}")
+                logger.debug(f"Main plans file not found: {main_plans_file}")
                 return None
             
             with open(main_plans_file, 'r', encoding='utf-8') as f:
@@ -4882,44 +4907,44 @@ class FootballCoachBot:
             assignment_key = f"{user_id}_{course_code}"
             main_plan_id = main_plans.get(assignment_key)
             
-            user_logger.debug(f"get_main_plan_for_user: user_id={user_id}, course_code={course_code}")
-            user_logger.debug(f"Looking for assignment key: {assignment_key}")
-            user_logger.debug(f"Available assignments: {list(main_plans.keys())}")
-            user_logger.debug(f"Found plan ID: {main_plan_id}")
+            logger.debug(f"🔍 get_main_plan_for_user: user_id={user_id}, course_code={course_code}")
+            logger.debug(f"🔍 Looking for assignment key: {assignment_key}")
+            logger.debug(f"🔍 Available assignments: {list(main_plans.keys())}")
+            logger.debug(f"🔍 Found plan ID: {main_plan_id}")
             
             if not main_plan_id:
-                user_logger.debug(f"No main plan assigned for {assignment_key}")
+                logger.debug(f"No main plan assigned for {assignment_key}")
                 return None
             
             # Find the plan details
             plans_file = f'admin_data/course_plans/{course_code}.json'
             if not os.path.exists(plans_file):
-                user_logger.debug(f"Course plans file not found: {plans_file}")
+                logger.debug(f"Course plans file not found: {plans_file}")
                 return None
             
             with open(plans_file, 'r', encoding='utf-8') as f:
                 all_plans = json.load(f)
             
-            user_logger.debug(f"Searching for plan ID {main_plan_id} in {len(all_plans)} plans")
+            logger.debug(f"🔍 Searching for plan ID {main_plan_id} in {len(all_plans)} plans")
             
             # Find the specific plan
             for plan in all_plans:
                 plan_id = plan.get('id')
                 target_user = plan.get('target_user_id')
-                user_logger.debug(f"Checking plan: id={plan_id}, target_user={target_user}")
+                logger.debug(f"🔍 Checking plan: id={plan_id}, target_user={target_user}")
                 
                 if plan.get('id') == main_plan_id:
                     # Check if this plan is for this user or general
                     if not target_user or str(target_user) == str(user_id):
-                        user_logger.debug(f"Found matching main plan for user {user_id}: {plan.get('title')}")
+                        logger.debug(f"✅ Found matching main plan: {plan.get('title')}")
                         return plan
                     else:
-                        user_logger.debug(f"Plan found but target_user mismatch for user {user_id}: {target_user} != {user_id}")
+                        logger.debug(f"❌ Plan found but target_user mismatch: {target_user} != {user_id}")
             
-            user_logger.debug(f"Plan ID {main_plan_id} not found in course plans for user {user_id}")
+            logger.debug(f"❌ Plan ID {main_plan_id} not found in course plans")
             return None
         except Exception as e:
-            error_logger.error(f"Error getting main plan for user {user_id} course {course_code}: {e}", exc_info=True)
+            logger.error(f"Error getting main plan for user {user_id} course {course_code}: {e}")
             return None
             
     async def handle_get_main_plan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4928,8 +4953,6 @@ class FootballCoachBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        if await self.check_cooldown(user_id):
-            return
         course_code = query.data.replace('get_main_plan_', '')
         
         main_plan = await self.get_main_plan_for_user(str(user_id), course_code)
@@ -4964,7 +4987,7 @@ class FootballCoachBot:
                 await query.answer("❌ فایل برنامه یافت نشد!", show_alert=True)
         
         except Exception as e:
-            error_logger.error(f"Error sending main plan to user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error sending main plan to user {user_id}: {e}")
             await query.answer("❌ خطا در ارسال برنامه!", show_alert=True)
 
     async def show_support_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5023,7 +5046,8 @@ class FootballCoachBot:
         import traceback
         
         # Log the full traceback
-        error_logger.error(f"Exception while handling an update: {context.error}", exc_info=True)
+        logger.error(f"Exception while handling an update: {context.error}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         
         # Print to console for debugging
         print(f"❌ ERROR: {context.error}")
@@ -5040,7 +5064,7 @@ class FootballCoachBot:
 def main():
     """Main function to run the bot"""
     if not Config.BOT_TOKEN:
-        logging.error("BOT_TOKEN not found in environment variables!")
+        logger.error("BOT_TOKEN not found in environment variables!")
         print("Error: BOT_TOKEN not found!")
         print("Please create .env file with your bot token:")
         print("BOT_TOKEN=your_bot_token_here")
@@ -5136,18 +5160,18 @@ def main():
     application.post_init = setup_commands
     
     # Start the bot
-    logging.info("Starting Football Coach Bot...")
-    logging.info("📱 Bot is ready to receive messages!")
+    logger.info("Starting Football Coach Bot...")
+    logger.info("📱 Bot is ready to receive messages!")
     print("🤖 Football Coach Bot is starting...")
     print("📱 Bot is ready to receive messages!")
 
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:
-        logging.info("Bot stopped by user")
+        logger.info("Bot stopped by user")
         print("\n🛑 Bot stopped by user")
     except Exception as e:
-        error_logger.error(f"Error running bot: {e}", exc_info=True)
+        logger.error(f"Error running bot: {e}")
         print(f"❌ Error: {e}")
 
 if __name__ == '__main__':
