@@ -42,12 +42,6 @@ class Config:
     
     # Use JSON files as fallback if DB is not configured
     USE_DATABASE = os.getenv('USE_DATABASE', 'False').lower() == 'true'
-
-    # Data file paths
-    BOT_DATA_FILE = 'bot_data.json'
-    QUESTIONNAIRE_DATA_FILE = 'questionnaire_data.json'
-    ADMINS_FILE = 'admins.json'
-    COUPONS_FILE = 'coupons.json'
     
     # Payment Configuration - Load from environment variables
     PAYMENT_CARD_NUMBER = os.getenv('PAYMENT_CARD_NUMBER', '1234-5678-9012-3456')
