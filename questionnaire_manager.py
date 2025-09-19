@@ -119,10 +119,11 @@ class QuestionnaireManager:
                 "validation": {"min_length": 5, "max_length": 150}
             },
             18: {
-                "text": "📷 عکس از جلو، بغل و پشت برام بفرست برای آنالیز.\n\n⚠️ لطفاً سه عکس جداگانه ارسال کنید: یکی از جلو، یکی از پهلو و یکی از پشت.",
+                "text": "📷 عکس از جلو، بغل و پشت برام بفرست برای آنالیز.\n\n⚠️ لطفاً حداقل یک عکس ارسال کنید (بهتره سه عکس جداگانه: جلو، پهلو، پشت).",
                 "type": "photo",
                 "emoji": "📷",
-                "photo_count": 3,
+                "photo_count": 3,  # Maximum photos
+                "min_photo_count": 1,  # Minimum photos required
                 "validation": {"required": True}
             },
             19: {
@@ -159,6 +160,15 @@ class QuestionnaireManager:
                 content = await f.read()
                 data = json.loads(content)
                 progress = data.get(str(user_id), None)
+                
+                # MIGRATION: Ensure photos dictionary exists for backward compatibility
+                if progress and "answers" in progress:
+                    if "photos" not in progress["answers"]:
+                        progress["answers"]["photos"] = {}
+                        # Save the migrated data back
+                        await self.save_user_progress(user_id, progress)
+                        print(f"INFO: Migrated user {user_id} questionnaire data to include photos dictionary")
+                
                 return progress
         except Exception as e:
             print(f"Error loading user progress for {user_id}: {e}")
@@ -194,7 +204,7 @@ class QuestionnaireManager:
         # Only create new progress if none exists
         progress = {
             "current_step": 1,
-            "answers": {},
+            "answers": {"photos": {}},  # Initialize photos dictionary for backward compatibility
             "started_at": datetime.now().isoformat(),
             "completed": False
         }
@@ -530,6 +540,31 @@ class QuestionnaireManager:
         if question:
             question["step"] = current_step
             question["progress_text"] = f"سوال {current_step} از 21"
+            
+            # EDGE CASE HANDLING: If this is a photo question with partial photos uploaded
+            if question.get("type") == "photo":
+                # Ensure photos dictionary exists (backward compatibility)
+                if "photos" not in progress["answers"]:
+                    progress["answers"]["photos"] = {}
+                
+                photos_key = str(current_step)
+                current_photos = len(progress["answers"]["photos"].get(photos_key, []))
+                min_photo_count = question.get("min_photo_count", question.get("photo_count", 1))
+                max_photo_count = question.get("photo_count", 1)
+                
+                if current_photos > 0:
+                    # User has some photos uploaded - provide context
+                    if current_photos >= min_photo_count:
+                        question["partial_upload_message"] = f"شما قبلاً {current_photos} عکس ارسال کرده‌اید. می‌توانید ادامه دهید یا عکس‌های بیشتری اضافه کنید."
+                        question["can_continue"] = True
+                    else:
+                        needed = min_photo_count - current_photos
+                        question["partial_upload_message"] = f"شما {current_photos} عکس ارسال کرده‌اید. لطفاً {needed} عکس دیگر ارسال کنید."
+                        question["can_continue"] = False
+                    
+                    question["photos_uploaded"] = current_photos
+                    question["max_photos"] = max_photo_count
+                    question["min_photos"] = min_photo_count
         
         return question
 
@@ -537,9 +572,15 @@ class QuestionnaireManager:
         """Send a question to the user"""
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         
-        message = f"""{question['progress_text']}
+        base_message = f"""{question['progress_text']}
 
 {question['text']}"""
+        
+        # Handle partial photo uploads
+        if question.get("partial_upload_message"):
+            base_message += f"\n\n💡 {question['partial_upload_message']}"
+        
+        message = base_message
         
         # Add choices as buttons if it's a choice question
         keyboard = []
@@ -547,6 +588,12 @@ class QuestionnaireManager:
             choices = question.get('choices', [])
             for choice in choices:
                 keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+        elif question.get('type') == 'photo' and question.get('can_continue'):
+            # Add continue button for photo questions where minimum is met
+            keyboard = [
+                [InlineKeyboardButton("➡️ ادامه به سوال بعد", callback_data='continue_photo_question')],
+                [InlineKeyboardButton("📷 ارسال عکس بیشتر", callback_data='add_more_photos')]
+            ]
         
         if keyboard:
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -680,26 +727,40 @@ class QuestionnaireManager:
         }
         progress["answers"]["photos"][str(current_step)].append(photo_info)
         
-        # Check if we have enough photos for this question
-        photo_count = question.get("photo_count", 1)
+        # Check photo requirements for this question
+        photo_count = question.get("photo_count", 1)  # Maximum photos
+        min_photo_count = question.get("min_photo_count", photo_count)  # Minimum photos (defaults to max for backwards compatibility)
         current_photos = len(progress["answers"]["photos"][str(current_step)])
         
         # Save progress after adding photo
         await self.save_user_progress(user_id, progress)
         
-        if current_photos < photo_count:
-            # Need more photos
-            remaining = photo_count - current_photos
+        # Check if we have minimum photos required
+        if current_photos < min_photo_count:
+            # Still need more photos to meet minimum
+            remaining = min_photo_count - current_photos
             return {
                 "status": "need_more_photos",
-                "message": f"✅ عکس دریافت شد! ({current_photos}/{photo_count})\n\n📸 لطفاً {remaining} عکس دیگر ارسال کنید.",
+                "message": f"✅ عکس دریافت شد! ({current_photos}/{photo_count})\n\n📸 لطفاً حداقل {remaining} عکس دیگر ارسال کنید.",
                 "current_step": current_step,
                 "photos_received": current_photos,
-                "photos_needed": photo_count
+                "photos_needed": photo_count,
+                "min_photos_needed": min_photo_count
+            }
+        elif current_photos < photo_count:
+            # Met minimum, but can add more photos
+            remaining = photo_count - current_photos
+            return {
+                "status": "can_continue_or_add_more",
+                "message": f"✅ عکس دریافت شد! ({current_photos}/{photo_count})\n\n📸 می‌تونید {remaining} عکس دیگر اضافه کنید یا به سوال بعد بروید.",
+                "current_step": current_step,
+                "photos_received": current_photos,
+                "photos_needed": photo_count,
+                "min_photos_met": True
             }
         
-        # We have enough photos, move to next step
-        progress["answers"][str(current_step)] = f"تصاویر ارسال شد ({photo_count} عکس)"
+        # We have maximum photos, move to next step automatically
+        progress["answers"][str(current_step)] = f"تصاویر ارسال شد ({current_photos} عکس)"
         progress["last_updated"] = datetime.now().isoformat()
         
         # Determine next step
@@ -994,3 +1055,73 @@ class QuestionnaireManager:
             "status": "edit_finished",
             "message": "✅ ویرایش پرسشنامه تکمیل شد.\n\nتغییرات شما ذخیره شده است."
         }
+
+    async def continue_to_next_question(self, user_id: int) -> Dict[str, Any]:
+        """Continue to next question when minimum photo requirements are met"""
+        progress = await self.load_user_progress(user_id)
+        if not progress:
+            return {
+                "status": "error",
+                "message": "پرسشنامه یافت نشد."
+            }
+        
+        current_step = progress.get("current_step", 1)
+        current_question = self.get_question(current_step, progress["answers"])
+        
+        if not current_question or current_question.get("type") != "photo":
+            return {
+                "status": "error",
+                "message": "این گزینه فقط برای سوالات عکس قابل استفاده است."
+            }
+        
+        # Check if minimum photo requirements are met
+        min_photo_count = current_question.get("min_photo_count", current_question.get("photo_count", 1))
+        photos_key = str(current_step)
+        
+        # Ensure photos dictionary exists (backward compatibility)
+        if "photos" not in progress["answers"]:
+            progress["answers"]["photos"] = {}
+            
+        current_photos = len(progress["answers"]["photos"].get(photos_key, []))
+        
+        if current_photos < min_photo_count:
+            return {
+                "status": "error",
+                "message": f"❌ شما باید حداقل {min_photo_count} عکس ارسال کنید.\n\nتعداد عکس‌های ارسالی: {current_photos}"
+            }
+        
+        # Mark current step as completed
+        progress["answers"][str(current_step)] = f"تصاویر ارسال شد ({current_photos} عکس)"
+        progress["last_updated"] = datetime.now().isoformat()
+        
+        # Move to next step
+        next_step = current_step + 1
+        
+        # Skip conditional questions if needed
+        while next_step <= 21:
+            next_question = self.get_question(next_step, progress["answers"])
+            if next_question is not None:
+                break
+            next_step += 1
+        
+        if next_step > 21:
+            # Questionnaire completed
+            progress["completed"] = True
+            progress["completed_at"] = datetime.now().isoformat()
+            await self.save_user_progress(user_id, progress)
+            
+            return {
+                "status": "completed",
+                "message": "🎉 پرسشنامه تکمیل شد!\n\nبرنامه تمرینی شما آماده خواهد شد."
+            }
+        else:
+            # Update progress to next step
+            progress["current_step"] = next_step
+            await self.save_user_progress(user_id, progress)
+            
+            return {
+                "status": "next_question",
+                "question": next_question,
+                "step": next_step,
+                "progress_text": f"سوال {next_step} از 21"
+            }

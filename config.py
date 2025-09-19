@@ -7,19 +7,14 @@ load_dotenv()
 class Config:
     # Bot Configuration
     BOT_TOKEN = os.getenv('BOT_TOKEN')
-    ADMIN_ID = int(os.getenv('ADMIN_ID', '0')) if os.getenv('ADMIN_ID', '').isdigit() else None
     
-    # Multiple Admin Support
+    # Multiple Admin Support - All admins are super admins
     @classmethod
     def get_admin_ids(cls):
-        """Get list of admin IDs from environment variables"""
+        """Get list of super admin IDs from environment variables"""
         admin_ids = []
         
-        # Add primary admin
-        if cls.ADMIN_ID:
-            admin_ids.append(cls.ADMIN_ID)
-        
-        # Add additional admins from ADMIN_IDS
+        # Get super admins from ADMIN_IDS
         admin_ids_env = os.getenv('ADMIN_IDS', '')
         if admin_ids_env:
             for admin_id in admin_ids_env.split(','):
@@ -50,8 +45,19 @@ class Config:
     @staticmethod
     def format_card_number(card_number: str) -> str:
         """Format card number for RTL display and make it copyable in Telegram with Markdown"""
-        # Use code formatting with proper language specification for better monospace display
-        return f"```\n{card_number}\n```"
+        # Remove any existing formatting to get clean digits only
+        clean_number = ''.join(c for c in card_number if c.isdigit())
+        
+        # Use clean number without dashes for easy copying
+        if len(clean_number) == 16:
+            formatted = clean_number
+        else:
+            # If not 16 digits, remove any non-digits from original
+            formatted = ''.join(c for c in card_number if c.isdigit()) or card_number
+        
+        # Add LTR mark to fix RTL-LTR display issues and use single backticks for easy copying
+        # \u200E is Left-to-Right Mark (LTR) to ensure proper direction
+        return f"\u200E`{formatted}`"
     
     @staticmethod
     def format_price(price: int) -> str:
@@ -117,7 +123,7 @@ class Config:
 از نظر تو، سخت‌ترین مشکلات یا چالش‌هایی که تو تمرین کردن داری چیه؟
 اگه قرار باشه یه قسمت از بدنتو تغییر بدی اون چیه؟
 کدوم شبکه‌های اجتماعی را بیشتر استفاده می‌کنی؟
-خب شماره‌تم بنویسسس  !"""
+خب شماره‌تم بنویس  !"""
     
     # Course Details
     COURSE_DETAILS = {

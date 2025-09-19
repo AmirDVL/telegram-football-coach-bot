@@ -640,7 +640,7 @@ python main.py
 
 ---
 
-## � PostgreSQL Database Setup
+##  PostgreSQL Database Setup
 
 ### Database Encoding Support
 
@@ -732,7 +732,7 @@ The bot automatically creates these comprehensive tables:
 
 ---
 
-## � Advanced Features & Analytics
+##  Advanced Features & Analytics
 
 ### 1. Comprehensive Statistics System
 

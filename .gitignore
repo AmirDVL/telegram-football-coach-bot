@@ -230,7 +230,7 @@ desktop.ini
 .directory
 
 # ================================
-# � NODE.JS - EXCLUDED
+#  NODE.JS - EXCLUDED
 # ================================
 node_modules/
 npm-debug.log*
