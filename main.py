@@ -5412,7 +5412,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(set_main_plan_|unset_main_plan_)'))
     
     # New person-centric plan management handlers (MUST come before legacy patterns!)
-    application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(user_plans_|manage_user_course_|upload_user_plan_|send_user_plan_|view_user_plan_|delete_user_plan_|send_latest_plan_|confirm_delete_|export_user_)'))
+    application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(user_plans_|manage_user_course_|upload_user_plan_|send_user_plan_|view_user_plan_|delete_user_plan_|send_latest_plan_|confirm_delete_|export_user_|users_page_)'))
     
     # Legacy plan management handlers 
     application.add_handler(CallbackQueryHandler(bot.admin_panel.handle_admin_callbacks, pattern='^(plan_course_|upload_plan_|send_plan_|view_plans_|send_to_user_|send_to_all_|view_plan_)'))
