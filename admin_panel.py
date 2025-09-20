@@ -49,7 +49,7 @@ class AdminPanel:
             
             # Log callback attempt for debugging
             await admin_debugger.log_callback_attempt(
-                update, query.data, user_id, success=True
+                user_id, query.data, {"success": True}
             )
             
             # Log admin action
@@ -69,7 +69,7 @@ class AdminPanel:
         except Exception as e:
             # Log the error with full context
             await admin_debugger.log_callback_attempt(
-                update, query.data, user_id, success=False, error=str(e)
+                user_id, query.data, {"success": False, "error": str(e)}
             )
             
             # Handle the error gracefully
