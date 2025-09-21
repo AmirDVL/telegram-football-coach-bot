@@ -207,6 +207,7 @@ class FootballCoachBot:
         self.payment_pending = {}
         self.user_coupon_codes = {}  # Store coupon codes entered by users
         self.user_last_action = {}  # Cooldown protection - track last action time per user
+        self.processing_payments = set()  # Track payments currently being processed to prevent race conditions
     
     async def check_cooldown(self, user_id: int) -> bool:
         """Check if user is in cooldown period (0.5s). Returns True if should skip action."""
@@ -3021,11 +3022,26 @@ class FootballCoachBot:
         else:
             await self._safe_edit_message_or_alert(query, "❌ داده نامعتبر.")
             return
+
+        # Race condition protection - check if payment is already being processed
+        payment_lock_key = f"{action}_{target_user_id}"
+        if payment_lock_key in self.processing_payments:
+            admin_logger.warning(f"RACE CONDITION BLOCKED - Payment {payment_lock_key} already being processed by another admin")
+            await query.answer("⚠️ این پرداخت در حال پردازش توسط ادمین دیگری است", show_alert=True)
+            return
+        
+        # Set lock to prevent duplicate processing
+        self.processing_payments.add(payment_lock_key)
+        admin_logger.info(f"Payment processing lock acquired: {payment_lock_key}")
         
         # Get user data
         user_data = await self.data_manager.get_user_data(target_user_id)
         
         if not user_data.get('receipt_submitted'):
+            # Release lock before returning error
+            if payment_lock_key in self.processing_payments:
+                self.processing_payments.remove(payment_lock_key)
+                admin_logger.info(f"Payment processing lock released due to missing receipt: {payment_lock_key}")
             await self._safe_edit_message_or_alert(query, "❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
             return
         
@@ -3044,11 +3060,19 @@ class FootballCoachBot:
                         payment_id = pid
             
             if not user_payment:
+                # Release lock before returning error
+                if payment_lock_key in self.processing_payments:
+                    self.processing_payments.remove(payment_lock_key)
+                    admin_logger.info(f"Payment processing lock released due to no pending payment found: {payment_lock_key}")
                 await self._safe_edit_message_or_alert(query, "❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
                 return
             
             course_type = user_payment.get('course_type')
             if not course_type:
+                # Release lock before returning error
+                if payment_lock_key in self.processing_payments:
+                    self.processing_payments.remove(payment_lock_key)
+                    admin_logger.info(f"Payment processing lock released due to missing course type: {payment_lock_key}")
                 await self._safe_edit_message_or_alert(query, "❌ نوع دوره برای این کاربر مشخص نیست.")
                 return
             
@@ -3275,6 +3299,11 @@ class FootballCoachBot:
                 user_name=user_data.get('name', 'ناشناس')
             )
             
+            # Release payment processing lock after successful approval
+            if payment_lock_key in self.processing_payments:
+                self.processing_payments.remove(payment_lock_key)
+                admin_logger.info(f"Payment processing lock released after approval: {payment_lock_key}")
+            
         elif action == 'reject':
             # Find and reject the most recent payment for this user
             payments_data = await self.data_manager.load_data('payments')
@@ -3290,6 +3319,10 @@ class FootballCoachBot:
                         payment_id = pid
             
             if not user_payment:
+                # Release lock before returning error
+                if payment_lock_key in self.processing_payments:
+                    self.processing_payments.remove(payment_lock_key)
+                    admin_logger.info(f"Payment processing lock released due to no pending payment found in rejection: {payment_lock_key}")
                 await self._safe_edit_message_or_alert(query, "❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
                 return
             
@@ -3365,6 +3398,11 @@ class FootballCoachBot:
                 acting_admin_name=update.effective_user.first_name or "ادمین",
                 user_name=user_data.get('name', 'ناشناس')
             )
+
+            # Release payment processing lock after successful rejection
+            if payment_lock_key in self.processing_payments:
+                self.processing_payments.remove(payment_lock_key)
+                admin_logger.info(f"Payment processing lock released after rejection: {payment_lock_key}")
 
         elif query.data.startswith('allow_extra_receipt_'):
             # Handle admin allowing extra receipt submission
