@@ -284,7 +284,15 @@ class FootballCoachBot:
                 admin_ids = await self.admin_panel.admin_manager.get_all_admin_ids()
             else:
                 admins_data = await self.data_manager.load_data('admins')
-                admin_ids = [int(admin_id) for admin_id in admins_data.keys()] if admins_data else []
+                admin_ids = []
+                if admins_data:
+                    # Extract admin IDs properly, avoiding non-numeric keys like 'super_admin'
+                    if 'admins' in admins_data:
+                        admin_ids = admins_data['admins']  # Use the admins list
+                    else:
+                        # Fallback: filter keys that are numeric
+                        admin_ids = [int(admin_id) for admin_id in admins_data.keys() 
+                                   if admin_id.isdigit() or (isinstance(admin_id, (int, str)) and str(admin_id).isdigit())]
             
             # Create message based on action
             if action == 'approve':
@@ -3611,6 +3619,7 @@ class FootballCoachBot:
 🔗 نام کاربری: {username}
 📚 دوره انتخابی: {self.get_course_name_farsi(user_data.get('course_selected', 'انتخاب نشده'))}
 💳 وضعیت پرداخت: {self.get_payment_status_text(user_data.get('payment_status'))}
+🧾 وضعیت فیش: {'✅ ارسال شده' if user_data.get('receipt_submitted') else '❌ ارسال نشده'}
 📋 وضعیت پرسشنامه: {self.get_questionnaire_status_text(user_data)}
 📅 تاریخ ثبت نام: {user_data.get('registration_date', 'نامشخص')}
 
