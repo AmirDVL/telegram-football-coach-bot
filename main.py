@@ -3259,10 +3259,10 @@ class FootballCoachBot:
             
             # Edit caption for photo messages, text for text messages
             try:
-                await query.edit_message_caption(caption=updated_message)
+                await query.edit_message_caption(caption=updated_message, reply_markup=None)
             except Exception:
                 # Fallback to edit_message_text if it's not a photo message
-                await query.edit_message_text(updated_message)
+                await query.edit_message_text(updated_message, reply_markup=None)
             
             # Notify all admins about the approval
             await self.notify_all_admins_payment_update(
@@ -3352,10 +3352,10 @@ class FootballCoachBot:
             
             # Edit caption for photo messages, text for text messages
             try:
-                await query.edit_message_caption(caption=updated_message)
+                await query.edit_message_caption(caption=updated_message, reply_markup=None)
             except Exception:
                 # Fallback to edit_message_text if it's not a photo message
-                await query.edit_message_text(updated_message)
+                await query.edit_message_text(updated_message, reply_markup=None)
             
             # Notify all admins about the rejection
             await self.notify_all_admins_payment_update(
