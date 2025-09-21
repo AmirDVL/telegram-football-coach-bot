@@ -2965,6 +2965,21 @@ class FootballCoachBot:
         # For unsupported files sent outside questionnaire mode - remain silent
         # (This matches the requirement for complete silence when no input expected)
 
+    async def _safe_edit_message_or_alert(self, query, message: str) -> None:
+        """
+        Safely edit message text or show alert popup if editing fails.
+        This handles cases where the original message is a photo without text.
+        """
+        try:
+            await query.edit_message_text(message)
+        except Exception as e:
+            # If editing fails (e.g., message is a photo), show popup alert instead
+            if "no text in the message" in str(e).lower():
+                await query.answer(message, show_alert=True)
+            else:
+                # For other errors, still try to show alert
+                await query.answer("❌ خطای غیرمنتظره رخ داد", show_alert=True)
+
     async def handle_payment_approval(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle admin payment approval/rejection and user profile viewing"""
         query = update.callback_query
@@ -3004,14 +3019,14 @@ class FootballCoachBot:
             target_user_id = int(query.data.replace('reject_payment_', ''))
             action = 'reject'
         else:
-            await query.edit_message_text("❌ داده نامعتبر.")
+            await self._safe_edit_message_or_alert(query, "❌ داده نامعتبر.")
             return
         
         # Get user data
         user_data = await self.data_manager.get_user_data(target_user_id)
         
         if not user_data.get('receipt_submitted'):
-            await query.edit_message_text("❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
+            await self._safe_edit_message_or_alert(query, "❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
             return
         
         if action == 'approve':
@@ -3029,12 +3044,12 @@ class FootballCoachBot:
                         payment_id = pid
             
             if not user_payment:
-                await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
+                await self._safe_edit_message_or_alert(query, "❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
                 return
             
             course_type = user_payment.get('course_type')
             if not course_type:
-                await query.edit_message_text("❌ نوع دوره برای این کاربر مشخص نیست.")
+                await self._safe_edit_message_or_alert(query, "❌ نوع دوره برای این کاربر مشخص نیست.")
                 return
             
             # Log the approval action
@@ -3275,7 +3290,7 @@ class FootballCoachBot:
                         payment_id = pid
             
             if not user_payment:
-                await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
+                await self._safe_edit_message_or_alert(query, "❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
                 return
             
             course_type = user_payment.get('course_type', user_data.get('course_selected', 'Unknown'))
