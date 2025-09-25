@@ -2577,8 +2577,24 @@ class FootballCoachBot:
             }
 
     async def increment_receipt_submission_count(self, user_id: int, course_code: str):
-        """Increment the receipt submission count for a user/course"""
+        """Increment the receipt submission count for a user/course with race condition protection"""
+        
+        # RACE CONDITION PROTECTION - Use a simple in-memory lock per user
+        receipt_lock_key = f"receipt_count_{user_id}"
+        
+        if not hasattr(self, 'receipt_count_locks'):
+            self.receipt_count_locks = set()
+        
+        # Check if this user's count is already being incremented
+        if receipt_lock_key in self.receipt_count_locks:
+            logger.warning(f"🔒 Receipt count increment blocked for user {user_id} - already in progress")
+            return
+        
+        # Lock this user's receipt count increment
+        self.receipt_count_locks.add(receipt_lock_key)
+        
         try:
+            # Atomic read-modify-write operation
             user_data = await self.data_manager.get_user_data(user_id)
             if not user_data:
                 logger.error(f"Failed to get user data for user {user_id} in increment_receipt_submission_count")
@@ -2588,14 +2604,22 @@ class FootballCoachBot:
             if not isinstance(receipt_attempts, dict):
                 receipt_attempts = {}
             
-            receipt_attempts[course_code] = receipt_attempts.get(course_code, 0) + 1
+            # Get current count and increment atomically
+            current_count = receipt_attempts.get(course_code, 0)
+            new_count = current_count + 1
+            receipt_attempts[course_code] = new_count
             
+            # Save atomically
             await self.data_manager.save_user_data(user_id, {'receipt_attempts': receipt_attempts})
             
-            logger.info(f"User {user_id} receipt attempt #{receipt_attempts[course_code]} for course {course_code}")
+            logger.info(f"✅ ATOMIC INCREMENT: User {user_id} receipt attempt #{new_count} for course {course_code}")
             
         except Exception as e:
-            logger.error(f"Error incrementing receipt count for user {user_id}, course {course_code}: {e}")
+            logger.error(f"❌ ATOMIC INCREMENT FAILED: User {user_id}, course {course_code}: {e}")
+        finally:
+            # Always release lock
+            if receipt_lock_key in self.receipt_count_locks:
+                self.receipt_count_locks.remove(receipt_lock_key)
 
     async def notify_admins_about_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
                                         photo, course_title: str, price: int, user_id: int):
@@ -2899,36 +2923,34 @@ class FootballCoachBot:
         # (This matches the requirement for complete silence when no input expected)
 
     async def handle_payment_approval(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle admin payment approval/rejection and user profile viewing"""
+        """Handle admin payment approval/rejection and user profile viewing with race condition protection"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         admin_name = update.effective_user.first_name or "Unknown Admin"
-        
+
         # Log admin action attempt
         logger.info(f"🔧 Payment approval attempt by admin {user_id} ({admin_name})")
         admin_logger.info(f"Payment approval attempt by admin {user_id} ({admin_name}) - Data: {query.data}")
-        
+
         # Check if user is admin
         is_admin = await self.admin_panel.admin_manager.is_admin(user_id)
-        
+
         if not is_admin:
             logger.warning(f"⚠️ Non-admin user {user_id} ({admin_name}) attempted payment approval")
             admin_logger.warning(f"Non-admin user {user_id} ({admin_name}) attempted payment approval - BLOCKED")
             await query.answer("❌ شما دسترسی ادمین ندارید.", show_alert=True)
             return
-        
+
         logger.info(f"✅ Admin access confirmed for user {user_id} ({admin_name})")
-        
+
         # Handle user profile viewing
         if query.data.startswith('view_user_'):
             target_user_id = int(query.data.replace('view_user_', ''))
             admin_logger.info(f"Admin {user_id} ({admin_name}) viewing profile of user {target_user_id}")
             await self.show_user_profile(query, target_user_id)
-            return
-        
-        # Extract user_id and action from callback data
+            return        # Extract user_id and action from callback data
         if query.data.startswith('approve_payment_'):
             target_user_id = int(query.data.replace('approve_payment_', ''))
             action = 'approve'
@@ -2938,13 +2960,33 @@ class FootballCoachBot:
         else:
             await query.edit_message_text("❌ داده نامعتبر.")
             return
+
+        # RACE CONDITION PROTECTION - Check if payment is already being processed
+        payment_lock_key = f"payment_process_{target_user_id}"
         
-        # Get user data
-        user_data = await self.data_manager.get_user_data(target_user_id)
-        
-        if not user_data.get('receipt_submitted'):
-            await query.edit_message_text("❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
+        if hasattr(self, 'processing_payments') and payment_lock_key in self.processing_payments:
+            admin_logger.warning(f"🔒 RACE CONDITION PREVENTED - Admin {user_id} tried to process payment for user {target_user_id} but it's already being processed by another admin")
+            await query.edit_message_text(
+                f"⚠️ پرداخت کاربر {target_user_id} در حال بررسی توسط ادمین دیگری است.\n\n"
+                f"لطفاً چند ثانیه صبر کنید و دوباره تلاش کنید."
+            )
             return
+
+        # Initialize processing_payments if not exists
+        if not hasattr(self, 'processing_payments'):
+            self.processing_payments = set()
+
+        # Lock this payment for processing
+        self.processing_payments.add(payment_lock_key)
+        admin_logger.info(f"🔒 PAYMENT LOCKED - Admin {user_id} processing payment for user {target_user_id}")
+        
+        try:
+            # Get user data
+            user_data = await self.data_manager.get_user_data(target_user_id)
+
+            if not user_data.get('receipt_submitted'):
+                await query.edit_message_text("❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
+                return
         
         if action == 'approve':
             # Find and approve the most recent payment for this user
@@ -3225,6 +3267,12 @@ class FootballCoachBot:
             target_user_id = int(query.data.replace('allow_extra_receipt_', ''))
             await self.handle_allow_extra_receipt(query, context, target_user_id, user_id)
             return
+            
+        finally:
+            # RACE CONDITION PROTECTION - Release payment lock
+            if hasattr(self, 'processing_payments') and payment_lock_key in self.processing_payments:
+                self.processing_payments.remove(payment_lock_key)
+                admin_logger.info(f"🔓 PAYMENT UNLOCKED - Admin {user_id} finished processing payment for user {target_user_id}")
 
     async def handle_allow_extra_receipt(self, query, context: ContextTypes.DEFAULT_TYPE, 
                                        target_user_id: int, admin_id: int):
