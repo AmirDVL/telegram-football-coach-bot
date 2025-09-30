@@ -24,7 +24,7 @@ class QuestionnaireManager:
                 "text": "🎂 سن؟",
                 "type": "number",
                 "emoji": "🎂",
-                "validation": {"min": 16, "max": 40}
+                "validation": {"min": 1, "max": 100}
             },
             3: {
                 "text": "📏 قد؟ (برحسب سانتی‌متر)",
