@@ -2950,7 +2950,15 @@ class FootballCoachBot:
             target_user_id = int(query.data.replace('view_user_', ''))
             admin_logger.info(f"Admin {user_id} ({admin_name}) viewing profile of user {target_user_id}")
             await self.show_user_profile(query, target_user_id)
-            return        # Extract user_id and action from callback data
+            return
+
+        # Handle admin allowing extra receipt submission
+        if query.data.startswith('allow_extra_receipt_'):
+            target_user_id = int(query.data.replace('allow_extra_receipt_', ''))
+            await self.handle_allow_extra_receipt(query, context, target_user_id, user_id)
+            return
+
+        # Extract user_id and action from callback data
         if query.data.startswith('approve_payment_'):
             target_user_id = int(query.data.replace('approve_payment_', ''))
             action = 'approve'
@@ -2987,286 +2995,280 @@ class FootballCoachBot:
             if not user_data.get('receipt_submitted'):
                 await query.edit_message_text("❌ هیچ فیش واریزی برای این کاربر یافت نشد.")
                 return
-        
-        if action == 'approve':
-            # Find and approve the most recent payment for this user
-            payments_data = await self.data_manager.load_data('payments')
-            user_payment = None
-            payment_id = None
-            
-            # Find the most recent pending payment for this user
-            for pid, payment_data in payments_data.items():
-                if (payment_data.get('user_id') == target_user_id and 
-                    payment_data.get('status') == 'pending_approval'):
-                    if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
-                        user_payment = payment_data
-                        payment_id = pid
-            
-            if not user_payment:
-                await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
-                return
-            
-            course_type = user_payment.get('course_type')
-            if not course_type:
-                await query.edit_message_text("❌ نوع دوره برای این کاربر مشخص نیست.")
-                return
-            
-            # Log the approval action
-            course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
-            price = user_payment.get('price', 0)
-            
-            admin_logger.info(f"💳 PAYMENT APPROVED by admin {user_id} ({admin_name})")
-            admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
-            admin_logger.info(f"   Course: {course_title} ({course_type})")
-            admin_logger.info(f"   Amount: {Config.format_price(price)}")
-            admin_logger.info(f"   Payment ID: {payment_id}")
-            
-            # Update payment status in payments table
-            user_payment['status'] = 'approved'
-            user_payment['approved_by'] = update.effective_user.id
-            user_payment['approved_at'] = datetime.now().isoformat()
-            payments_data[payment_id] = user_payment
-            await self.data_manager.save_data('payments', payments_data)
-            
-            logger.info(f"✅ Payment data updated for user {target_user_id}")
-            
-            # Update user data
-            await self.data_manager.save_user_data(target_user_id, {
-                'payment_verified': True,
-                'awaiting_form': True,
-                'course': course_type,
-                'payment_status': 'approved'
-            })
-            
-            logger.info(f"✅ User data updated for user {target_user_id}")
-            
-            # Update statistics
-            await self.data_manager.update_statistics('total_payments')
-            if course_type:
-                await self.data_manager.update_statistics(f'course_{course_type}')
-            
-            # Remove from pending payments
-            if target_user_id in self.payment_pending:
-                del self.payment_pending[target_user_id]
-            
-            # Notify user and start questionnaire automatically
-            logger.info(f"🚀 Starting automatic questionnaire notification for user {target_user_id}")
-            admin_logger.info(f"🚀 Sending automatic questionnaire to user {target_user_id}")
-            
-            notification_sent = False
-            notification_error = None
-            
-            try:
-                # Get first question to start questionnaire immediately
-                logger.debug(f"📝 Starting questionnaire for user {target_user_id}")
-                await self.questionnaire_manager.start_questionnaire(target_user_id)
+
+            if action == 'approve':
+                # Find and approve the most recent payment for this user
+                payments_data = await self.data_manager.load_data('payments')
+                user_payment = None
+                payment_id = None
                 
-                logger.debug(f"📋 Getting first question for user {target_user_id}")
-                first_question = await self.questionnaire_manager.get_current_question(target_user_id)
+                # Find the most recent pending payment for this user
+                for pid, payment_data in payments_data.items():
+                    if (payment_data.get('user_id') == target_user_id and 
+                        payment_data.get('status') == 'pending_approval'):
+                        if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
+                            user_payment = payment_data
+                            payment_id = pid
+            
+                if not user_payment:
+                    await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
+                    return
                 
-                if first_question:
-                    # Send approval message with first question directly
-                    progress_text = "سوال 1 از 21"
-                    message = f"✅ پرداخت شما تایید شد!\n\n📝 حالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:\n\n{progress_text}\n\n{first_question['text']}"
-                    
-                    keyboard = []
-                    if first_question.get('type') == 'choice':
-                        choices = first_question.get('choices', [])
-                        for choice in choices:
-                            keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
-                    keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    logger.info(f"📤 Sending questionnaire message to user {target_user_id}")
-                    admin_logger.info(f"📤 Sending questionnaire with first question to user {target_user_id}")
-                    
-                    await context.bot.send_message(
-                        chat_id=target_user_id,
-                        text=message,
-                        reply_markup=reply_markup
-                    )
-                    
-                    notification_sent = True
-                    logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id}")
-                    admin_logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id} - First question delivered")
-                    
-                else:
-                    # Fallback to button if question not found
-                    logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
-                    admin_logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
-                    
-                    keyboard = [[InlineKeyboardButton("🎯 شروع پرسشنامه", callback_data='start_questionnaire')]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await context.bot.send_message(
-                        chat_id=target_user_id,
-                        text="✅ پرداخت شما تایید شد!\n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:",
-                        reply_markup=reply_markup
-                    )
-                    
-                    notification_sent = True
-                    logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id}")
-                    admin_logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id} - Button to start questionnaire")
+                course_type = user_payment.get('course_type')
+                if not course_type:
+                    await query.edit_message_text("❌ نوع دوره برای این کاربر مشخص نیست.")
+                    return
                 
-            except Exception as e:
-                notification_error = str(e)
-                logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
-                admin_logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
+                # Log the approval action
+                course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
+                price = user_payment.get('price', 0)
                 
-                # Try to at least notify them of approval
+                admin_logger.info(f"💳 PAYMENT APPROVED by admin {user_id} ({admin_name})")
+                admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
+                admin_logger.info(f"   Course: {course_title} ({course_type})")
+                admin_logger.info(f"   Amount: {Config.format_price(price)}")
+                admin_logger.info(f"   Payment ID: {payment_id}")
+                
+                # Update payment status in payments table
+                user_payment['status'] = 'approved'
+                user_payment['approved_by'] = update.effective_user.id
+                user_payment['approved_at'] = datetime.now().isoformat()
+                payments_data[payment_id] = user_payment
+                await self.data_manager.save_data('payments', payments_data)
+                
+                logger.info(f"✅ Payment data updated for user {target_user_id}")
+                
+                # Update user data
+                await self.data_manager.save_user_data(target_user_id, {
+                    'payment_verified': True,
+                    'awaiting_form': True,
+                    'course': course_type,
+                    'payment_status': 'approved'
+                })
+                
+                logger.info(f"✅ User data updated for user {target_user_id}")
+            
+                # Update statistics
+                await self.data_manager.update_statistics('total_payments')
+                if course_type:
+                    await self.data_manager.update_statistics(f'course_{course_type}')
+                
+                # Remove from pending payments
+                if target_user_id in self.payment_pending:
+                    del self.payment_pending[target_user_id]
+                
+                # Notify user and start questionnaire automatically
+                logger.info(f"🚀 Starting automatic questionnaire notification for user {target_user_id}")
+                admin_logger.info(f"🚀 Sending automatic questionnaire to user {target_user_id}")
+                
+                notification_sent = False
+                notification_error = None
+                
                 try:
-                    logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
-                    admin_logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
+                    # Get first question to start questionnaire immediately
+                    logger.debug(f"📝 Starting questionnaire for user {target_user_id}")
+                    await self.questionnaire_manager.start_questionnaire(target_user_id)
                     
-                    await context.bot.send_message(
-                        chat_id=target_user_id,
-                        text="✅ پرداخت شما تایید شد! برای ادامه از دستور /start استفاده کنید."
-                    )
+                    logger.debug(f"📋 Getting first question for user {target_user_id}")
+                    first_question = await self.questionnaire_manager.get_current_question(target_user_id)
                     
-                    notification_sent = True
-                    logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
-                    admin_logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
+                    if first_question:
+                        # Send approval message with first question directly
+                        progress_text = "سوال 1 از 21"
+                        message = f"✅ پرداخت شما تایید شد!\n\n📝 حالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:\n\n{progress_text}\n\n{first_question['text']}"
+                        
+                        keyboard = []
+                        if first_question.get('type') == 'choice':
+                            choices = first_question.get('choices', [])
+                            for choice in choices:
+                                keyboard.append([InlineKeyboardButton(choice, callback_data=f'q_answer_{choice}')])
+                        keyboard.append([InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='back_to_user_menu')])
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        logger.info(f"📤 Sending questionnaire message to user {target_user_id}")
+                        admin_logger.info(f"📤 Sending questionnaire with first question to user {target_user_id}")
+                        
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text=message,
+                            reply_markup=reply_markup
+                        )
+                        
+                        notification_sent = True
+                        logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id}")
+                        admin_logger.info(f"✅ QUESTIONNAIRE MESSAGE SENT to user {target_user_id} - First question delivered")
+                        
+                    else:
+                        # Fallback to button if question not found
+                        logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
+                        admin_logger.warning(f"⚠️ First question not found for user {target_user_id}, using fallback button")
+                        
+                        keyboard = [[InlineKeyboardButton("🎯 شروع پرسشنامه", callback_data='start_questionnaire')]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text="✅ پرداخت شما تایید شد!\n\nحالا برای شخصی‌سازی برنامه تمرینتان، چند سوال کوتاه از شما می‌پرسیم:",
+                            reply_markup=reply_markup
+                        )
+                        
+                        notification_sent = True
+                        logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id}")
+                        admin_logger.info(f"✅ FALLBACK MESSAGE SENT to user {target_user_id} - Button to start questionnaire")
                     
-                except Exception as e2:
-                    notification_error = f"{e} | Fallback also failed: {e2}"
-                    logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
-                    admin_logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
-            
-            # Final notification status log
-            if notification_sent:
-                admin_logger.info(f"🎉 PAYMENT APPROVAL COMPLETE: User {target_user_id} notified successfully")
-            else:
-                admin_logger.error(f"🚨 PAYMENT APPROVAL INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
-            
-            # Update admin message
-            updated_message = f"""✅ پرداخت تایید شد:
+                except Exception as e:
+                    notification_error = str(e)
+                    logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
+                    admin_logger.error(f"❌ FAILED to send questionnaire message to user {target_user_id}: {e}")
+                    
+                    # Try to at least notify them of approval
+                    try:
+                        logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
+                        admin_logger.info(f"🔄 Attempting fallback notification to user {target_user_id}")
+                        
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text="✅ پرداخت شما تایید شد! برای ادامه از دستور /start استفاده کنید."
+                        )
+                        
+                        notification_sent = True
+                        logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
+                        admin_logger.info(f"✅ FALLBACK NOTIFICATION SENT to user {target_user_id}")
+                        
+                    except Exception as e2:
+                        notification_error = f"{e} | Fallback also failed: {e2}"
+                        logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
+                        admin_logger.error(f"❌ EVEN FALLBACK FAILED for user {target_user_id}: {e2}")
+                
+                # Final notification status log
+                if notification_sent:
+                    admin_logger.info(f"🎉 PAYMENT APPROVAL COMPLETE: User {target_user_id} notified successfully")
+                else:
+                    admin_logger.error(f"🚨 PAYMENT APPROVAL INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
+                
+                # Update admin message
+                updated_message = f"""✅ پرداخت تایید شد:
 👤 کاربر: {user_data.get('name', 'ناشناس')}
 🆔 User ID: {target_user_id}
 📚 دوره: {course_title}
 💰 مبلغ: {Config.format_price(price)}
 ⏰ تایید شده توسط: {admin_name}
 📧 اطلاع‌رسانی: {'✅ موفق' if notification_sent else '❌ ناموفق'}"""
-            
-            # Edit caption for photo messages, text for text messages
-            try:
-                await query.edit_message_caption(caption=updated_message)
-            except Exception:
-                # Fallback to edit_message_text if it's not a photo message
-                await query.edit_message_text(updated_message)
-            
-            # Notify all admins about the approval
-            await self.notify_all_admins_payment_update(
-                bot=context.bot,
-                payment_user_id=target_user_id,
-                action='approve',
-                acting_admin_name=update.effective_user.first_name or "ادمین",
-                course_title=course_title,
-                price=price,
-                user_name=user_data.get('name', 'ناشناس')
-            )
-            
-        elif action == 'reject':
-            # Find and reject the most recent payment for this user
-            payments_data = await self.data_manager.load_data('payments')
-            user_payment = None
-            payment_id = None
-            
-            # Find the most recent pending payment for this user
-            for pid, payment_data in payments_data.items():
-                if (payment_data.get('user_id') == target_user_id and 
-                    payment_data.get('status') == 'pending_approval'):
-                    if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
-                        user_payment = payment_data
-                        payment_id = pid
-            
-            if not user_payment:
-                await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
-                return
-            
-            course_type = user_payment.get('course_type', user_data.get('course_selected', 'Unknown'))
-            course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
-            
-            # Log the rejection action
-            admin_logger.info(f"❌ PAYMENT REJECTED by admin {user_id} ({admin_name})")
-            admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
-            admin_logger.info(f"   Course: {course_title} ({course_type})")
-            admin_logger.info(f"   Payment ID: {payment_id}")
-            
-            # Update payment status in payments table
-            user_payment['status'] = 'rejected'
-            user_payment['rejected_by'] = update.effective_user.id
-            user_payment['rejected_at'] = datetime.now().isoformat()
-            payments_data[payment_id] = user_payment
-            await self.data_manager.save_data('payments', payments_data)
-            
-            # Also update user data for backward compatibility
-            await self.data_manager.save_user_data(target_user_id, {
-                'payment_status': 'rejected'
-            })
-            
-            logger.info(f"✅ Payment rejected for user {target_user_id}")
-            
-            # Remove from pending payments
-            if target_user_id in self.payment_pending:
-                del self.payment_pending[target_user_id]
-            
-            # Notify user
-            notification_sent = False
-            notification_error = None
-            
-            try:
-                logger.info(f"📤 Sending rejection notification to user {target_user_id}")
-                admin_logger.info(f"📤 Sending rejection notification to user {target_user_id}")
                 
-                await context.bot.send_message(
-                    chat_id=target_user_id,
-                    text="❌ متاسفانه پرداخت شما تایید نشد. لطفا با پشتیبانی تماس بگیرید یا فیش صحیح را ارسال کنید."
+                # Edit caption for photo messages, text for text messages
+                try:
+                    await query.edit_message_caption(caption=updated_message)
+                except Exception:
+                    # Fallback to edit_message_text if it's not a photo message
+                    await query.edit_message_text(updated_message)
+                
+                # Notify all admins about the approval
+                await self.notify_all_admins_payment_update(
+                    bot=context.bot,
+                    payment_user_id=target_user_id,
+                    action='approve',
+                    acting_admin_name=update.effective_user.first_name or "ادمین",
+                    course_title=course_title,
+                    price=price,
+                    user_name=user_data.get('name', 'ناشناس')
                 )
                 
-                notification_sent = True
-                logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
-                admin_logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
+            elif action == 'reject':
+                # Find and reject the most recent payment for this user
+                payments_data = await self.data_manager.load_data('payments')
+                user_payment = None
+                payment_id = None
                 
-            except Exception as e:
-                notification_error = str(e)
-                logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
-                admin_logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
-            
-            # Final notification status log
-            if notification_sent:
-                admin_logger.info(f"🎉 PAYMENT REJECTION COMPLETE: User {target_user_id} notified successfully")
-            else:
-                admin_logger.error(f"🚨 PAYMENT REJECTION INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
-            
-            # Update admin message
-            updated_message = f"""❌ پرداخت رد شد:
+                # Find the most recent pending payment for this user
+                for pid, payment_data in payments_data.items():
+                    if (payment_data.get('user_id') == target_user_id and 
+                        payment_data.get('status') == 'pending_approval'):
+                        if user_payment is None or payment_data.get('timestamp', '') > user_payment.get('timestamp', ''):
+                            user_payment = payment_data
+                            payment_id = pid
+                
+                if not user_payment:
+                    await query.edit_message_text("❌ هیچ پرداخت معلقی برای این کاربر یافت نشد.")
+                    return
+                
+                course_type = user_payment.get('course_type', user_data.get('course_selected', 'Unknown'))
+                course_title = Config.COURSE_DETAILS.get(course_type, {}).get('title', 'نامشخص')
+                
+                # Log the rejection action
+                admin_logger.info(f"❌ PAYMENT REJECTED by admin {user_id} ({admin_name})")
+                admin_logger.info(f"   Target user: {target_user_id} ({user_data.get('name', 'Unknown')})")
+                admin_logger.info(f"   Course: {course_title} ({course_type})")
+                admin_logger.info(f"   Payment ID: {payment_id}")
+                
+                # Update payment status in payments table
+                user_payment['status'] = 'rejected'
+                user_payment['rejected_by'] = update.effective_user.id
+                user_payment['rejected_at'] = datetime.now().isoformat()
+                payments_data[payment_id] = user_payment
+                await self.data_manager.save_data('payments', payments_data)
+                
+                # Also update user data for backward compatibility
+                await self.data_manager.save_user_data(target_user_id, {
+                    'payment_status': 'rejected'
+                })
+                
+                logger.info(f"✅ Payment rejected for user {target_user_id}")
+                
+                # Remove from pending payments
+                if target_user_id in self.payment_pending:
+                    del self.payment_pending[target_user_id]
+                
+                # Notify user
+                notification_sent = False
+                notification_error = None
+                
+                try:
+                    logger.info(f"📤 Sending rejection notification to user {target_user_id}")
+                    admin_logger.info(f"📤 Sending rejection notification to user {target_user_id}")
+                    
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text="❌ متاسفانه پرداخت شما تایید نشد. لطفا با پشتیبانی تماس بگیرید یا فیش صحیح را ارسال کنید."
+                    )
+                    
+                    notification_sent = True
+                    logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
+                    admin_logger.info(f"✅ REJECTION NOTIFICATION SENT to user {target_user_id}")
+                    
+                except Exception as e:
+                    notification_error = str(e)
+                    logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
+                    admin_logger.error(f"❌ FAILED to notify user {target_user_id} about rejection: {e}")
+                
+                # Final notification status log
+                if notification_sent:
+                    admin_logger.info(f"🎉 PAYMENT REJECTION COMPLETE: User {target_user_id} notified successfully")
+                else:
+                    admin_logger.error(f"🚨 PAYMENT REJECTION INCOMPLETE: User {target_user_id} NOT notified - Error: {notification_error}")
+                
+                # Update admin message
+                updated_message = f"""❌ پرداخت رد شد:
 👤 کاربر: {user_data.get('name', 'ناشناس')}
 🆔 User ID: {target_user_id}
 📚 دوره: {course_title}
 ⏰ رد شده توسط: {admin_name}
 📧 اطلاع‌رسانی: {'✅ موفق' if notification_sent else '❌ ناموفق'}"""
-            
-            # Edit caption for photo messages, text for text messages
-            try:
-                await query.edit_message_caption(caption=updated_message)
-            except Exception:
-                # Fallback to edit_message_text if it's not a photo message
-                await query.edit_message_text(updated_message)
-            
-            # Notify all admins about the rejection
-            await self.notify_all_admins_payment_update(
-                bot=context.bot,
-                payment_user_id=target_user_id,
-                action='reject',
-                acting_admin_name=update.effective_user.first_name or "ادمین",
-                user_name=user_data.get('name', 'ناشناس')
-            )
-
-        elif query.data.startswith('allow_extra_receipt_'):
-            # Handle admin allowing extra receipt submission
-            target_user_id = int(query.data.replace('allow_extra_receipt_', ''))
-            await self.handle_allow_extra_receipt(query, context, target_user_id, user_id)
-            return
+                
+                # Edit caption for photo messages, text for text messages
+                try:
+                    await query.edit_message_caption(caption=updated_message)
+                except Exception:
+                    # Fallback to edit_message_text if it's not a photo message
+                    await query.edit_message_text(updated_message)
+                
+                # Notify all admins about the rejection
+                await self.notify_all_admins_payment_update(
+                    bot=context.bot,
+                    payment_user_id=target_user_id,
+                    action='reject',
+                    acting_admin_name=update.effective_user.first_name or "ادمین",
+                    user_name=user_data.get('name', 'ناشناس')
+                )
             
         finally:
             # RACE CONDITION PROTECTION - Release payment lock
