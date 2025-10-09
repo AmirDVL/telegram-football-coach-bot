@@ -3165,38 +3165,69 @@ class AdminPanel:
             user_data = bot_data.get('users', {}).get(user_id, {})
             user_name = user_data.get('name', 'نامشخص')
             
-            # Send plan to user - Updated for Telegram file_id support
+            # Send plan to user - Updated for local file support with file_id fallback
             plan_content = plan.get('content')  # This is the Telegram file_id
+            plan_local_path = plan.get('local_path')  # Local file path
             plan_content_type = plan.get('content_type', 'document')
             plan_title = plan.get('title', 'برنامه تمرینی')
             plan_filename = plan.get('filename', 'برنامه')
             
-            if plan_content:
+            if plan_local_path or plan_content:
                 try:
-                    # Validate file_id format first
-                    if not isinstance(plan_content, str) or len(plan_content) < 10:
-                        raise ValueError("Invalid file_id format")
-                    
-                    # Send using Telegram file_id directly
                     caption = f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n📄 فایل: {plan_filename}\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
                     
-                    if plan_content_type == 'photo':
-                        await context.bot.send_photo(
-                            chat_id=int(user_id),
-                            photo=plan_content,
-                            caption=caption
-                        )
-                    else:  # document, or any other type - send as document
-                        await context.bot.send_document(
-                            chat_id=int(user_id),
-                            document=plan_content,
-                            caption=caption
-                        )
+                    # Try to send from local file first
+                    from plan_file_manager import plan_file_manager
+                    sent_successfully = False
+                    
+                    if plan_local_path and plan_file_manager.file_exists(plan_local_path):
+                        try:
+                            # Send from local file
+                            if plan_content_type == 'photo':
+                                with open(plan_local_path, 'rb') as photo_file:
+                                    await context.bot.send_photo(
+                                        chat_id=int(user_id),
+                                        photo=photo_file,
+                                        caption=caption
+                                    )
+                            else:  # document
+                                with open(plan_local_path, 'rb') as doc_file:
+                                    await context.bot.send_document(
+                                        chat_id=int(user_id),
+                                        document=doc_file,
+                                        caption=caption,
+                                        filename=plan_filename
+                                    )
+                            sent_successfully = True
+                            logger.info(f"Plan sent from local file: {plan_local_path}")
+                        except Exception as local_error:
+                            logger.warning(f"Failed to send from local file {plan_local_path}: {local_error}, trying file_id fallback")
+                    
+                    # Fallback to file_id if local file failed or doesn't exist
+                    if not sent_successfully and plan_content:
+                        # Validate file_id format first
+                        if not isinstance(plan_content, str) or len(plan_content) < 10:
+                            raise ValueError("Invalid file_id format")
+                        
+                        # Send using Telegram file_id directly
+                        if plan_content_type == 'photo':
+                            await context.bot.send_photo(
+                                chat_id=int(user_id),
+                                photo=plan_content,
+                                caption=caption
+                            )
+                        else:  # document, or any other type - send as document
+                            await context.bot.send_document(
+                                chat_id=int(user_id),
+                                document=plan_content,
+                                caption=caption
+                            )
+                        logger.info(f"Plan sent using file_id: {plan_content[:20]}...")
                     
                     await query.edit_message_text(
                         f"✅ برنامه '{plan_title}' با موفقیت برای {user_name} ارسال شد!",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton(" بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
+                            [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
                         ])
                     )
                     

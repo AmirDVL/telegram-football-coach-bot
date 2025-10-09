@@ -1504,21 +1504,45 @@ class FootballCoachBot:
             
             # Validate file type (similar to questionnaire system)
             if filename.lower().endswith(('.pdf', '.txt', '.doc', '.docx')):
-                # Log successful file upload
-                await admin_error_handler.log_file_operation(
-                    operation='plan_upload',
-                    file_type='document',
+                # Download and save file locally
+                from plan_file_manager import plan_file_manager
+                course_type = context.user_data[user_id].get('plan_course_type', 'general')
+                
+                file_info = await plan_file_manager.download_and_save_plan(
+                    bot=context.bot,
                     file_id=document.file_id,
-                    local_path=filename,
-                    success=True,
-                    admin_id=user_id
+                    filename=filename,
+                    course_type=course_type,
+                    metadata={
+                        'uploaded_by': user_id,
+                        'file_size': document.file_size
+                    }
                 )
                 
-                # Store document info
-                context.user_data[user_id]['plan_content'] = document.file_id
-                context.user_data[user_id]['plan_content_type'] = 'document'
-                context.user_data[user_id]['plan_filename'] = filename
-                context.user_data[user_id]['plan_upload_step'] = 'description'
+                if file_info:
+                    # Log successful file upload
+                    await admin_error_handler.log_file_operation(
+                        operation='plan_upload',
+                        file_type='document',
+                        file_id=document.file_id,
+                        local_path=file_info['local_path'],
+                        success=True,
+                        admin_id=user_id
+                    )
+                    
+                    # Store both file_id and local path
+                    context.user_data[user_id]['plan_content'] = document.file_id
+                    context.user_data[user_id]['plan_local_path'] = file_info['local_path']
+                    context.user_data[user_id]['plan_content_type'] = 'document'
+                    context.user_data[user_id]['plan_filename'] = filename
+                    context.user_data[user_id]['plan_file_size'] = file_info['file_size']
+                    context.user_data[user_id]['plan_upload_step'] = 'description'
+                else:
+                    await update.message.reply_text(
+                        "❌ خطا در دانلود و ذخیره فایل!\n\n"
+                        "لطفاً دوباره تلاش کنید."
+                    )
+                    return
                 
                 # Get file type for user feedback
                 file_extension = filename.split('.')[-1].upper()
@@ -1575,10 +1599,38 @@ class FootballCoachBot:
         if upload_step == 'file':
             photo = update.message.photo[-1]  # Get highest resolution
             
-            # Store photo info
-            context.user_data[user_id]['plan_content'] = photo.file_id
-            context.user_data[user_id]['plan_content_type'] = 'photo'
-            context.user_data[user_id]['plan_upload_step'] = 'description'
+            # Download and save photo locally
+            from plan_file_manager import plan_file_manager
+            course_type = context.user_data[user_id].get('plan_course_type', 'general')
+            
+            # Generate a filename for the photo
+            filename = f"plan_photo_{int(datetime.now().timestamp())}.jpg"
+            
+            file_info = await plan_file_manager.download_and_save_plan(
+                bot=context.bot,
+                file_id=photo.file_id,
+                filename=filename,
+                course_type=course_type,
+                metadata={
+                    'uploaded_by': user_id,
+                    'file_size': photo.file_size if hasattr(photo, 'file_size') else None
+                }
+            )
+            
+            if file_info:
+                # Store both file_id and local path
+                context.user_data[user_id]['plan_content'] = photo.file_id
+                context.user_data[user_id]['plan_local_path'] = file_info['local_path']
+                context.user_data[user_id]['plan_content_type'] = 'photo'
+                context.user_data[user_id]['plan_filename'] = filename
+                context.user_data[user_id]['plan_file_size'] = file_info['file_size']
+                context.user_data[user_id]['plan_upload_step'] = 'description'
+            else:
+                await update.message.reply_text(
+                    "❌ خطا در دانلود و ذخیره عکس!\n\n"
+                    "لطفاً دوباره تلاش کنید."
+                )
+                return True
             
             keyboard = [[InlineKeyboardButton("⏩ رد کردن توضیحات", callback_data='skip_plan_description')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1642,6 +1694,12 @@ class FootballCoachBot:
             'created_at': datetime.now().isoformat(),
             'created_by': user_id
         }
+        
+        # Add local file path if available
+        local_path = context.user_data[user_id].get('plan_local_path')
+        if local_path:
+            plan_data['local_path'] = local_path
+            plan_data['file_size'] = context.user_data[user_id].get('plan_file_size', 0)
         
         # If uploading for specific user, add user-specific info
         if target_user_id:
