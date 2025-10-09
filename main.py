@@ -2735,6 +2735,18 @@ class FootballCoachBot:
             elif result["status"] == "need_more_photos":
                 await update.message.reply_text(result["message"])
                 return
+            elif result["status"] == "can_continue_or_add_more":
+                # User can continue to next step or add more photos
+                keyboard = [
+                    [InlineKeyboardButton("➡️ ادامه به سوال بعد", callback_data='continue_questionnaire')],
+                    [InlineKeyboardButton("📸 افزودن عکس دیگر", callback_data='add_more_photos')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    result["message"], 
+                    reply_markup=reply_markup
+                )
+                return
             elif result["status"] == "next_question":
                 # Send confirmation and next question
                 await update.message.reply_text("✅ عکس دریافت شد!")
@@ -4233,6 +4245,8 @@ class FootballCoachBot:
             await self.show_payment_status(update, context, user_data)
         elif query.data == 'continue_questionnaire':
             await self.continue_questionnaire_callback(update, context)
+        elif query.data == 'add_more_photos':
+            await self.handle_add_more_photos_callback(update, context)
         elif query.data == 'purchase_additional_course':
             await self.purchase_additional_course(update, context)
         elif query.data == 'restart_questionnaire':
@@ -4405,6 +4419,43 @@ class FootballCoachBot:
                     "❌ خطا در شروع پرسشنامه.\n\n"
                     "لطفاً از /start استفاده کرده و مجدداً تلاش کنید."
                 )
+
+    async def handle_add_more_photos_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  
+        """Handle add more photos callback - prompts user to send more photos"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        
+        # Get current questionnaire progress
+        progress = await self.questionnaire_manager.load_user_progress(user_id) 
+        if not progress:
+            await query.edit_message_text("❌ خطا: وضعیت پرسشنامه یافت نشد!")
+            return
+            
+        current_step = progress["current_step"]
+        current_question = self.questionnaire_manager.get_question(current_step, progress["answers"])
+        
+        if not current_question or current_question.get("type") != "photo":
+            await query.edit_message_text("❌ خطا: این سوال مربوط به ارسال عکس نیست!")
+            return
+            
+        # Get photo count information
+        current_photos = len(progress["answers"]["photos"].get(str(current_step), []))
+        max_photos = current_question.get("photo_count", 1)
+        remaining = max_photos - current_photos
+        
+        # Set questionnaire active flag so photos are properly routed
+        if user_id not in context.user_data:
+            context.user_data[user_id] = {}
+        context.user_data[user_id]['questionnaire_active'] = True
+        
+        await query.edit_message_text(
+            f"📸 شما تاکنون {current_photos} عکس ارسال کرده‌اید.\n\n"
+            f"می‌توانید تا {remaining} عکس دیگر ارسال کنید.\n\n"
+            f"💡 عکس جدید خود را ارسال کنید:\n\n"
+            f"📋 {current_question['text']}"
+        )
 
     async def show_user_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_data: dict) -> None:
         """Show comprehensive user status - ALL information in one place"""
