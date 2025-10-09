@@ -168,32 +168,3 @@ class InputValidator:
 
 # Create global instance
 input_validator = InputValidator()
-
-
-def sanitize_text(text: str) -> str:
-    """
-    Sanitize user input text by removing potentially dangerous characters
-    and normalizing whitespace.
-    
-    Args:
-        text: Input text to sanitize
-        
-    Returns:
-        Sanitized text string
-    """
-    if not text:
-        return ""
-    
-    # Convert to string if not already
-    text = str(text)
-    
-    # Remove null bytes and other control characters except newlines/tabs
-    sanitized = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t\r')
-    
-    # Normalize whitespace
-    sanitized = ' '.join(sanitized.split())
-    
-    # Remove leading/trailing whitespace
-    sanitized = sanitized.strip()
-    
-    return sanitized

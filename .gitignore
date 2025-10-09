@@ -38,10 +38,6 @@ admin_data/
 logs/
 *.log
 *.log.*
-*_logs.txt
-august_14_logs.txt
-september_14_logs.txt
-sample_logs.txt
 monitoring/
 audit/
 
@@ -88,9 +84,6 @@ check_*.py
 audit_*.py
 fix_*.py
 reset_*.py
-*_SUMMARY.py
-ISSUE_RESOLUTION_SUMMARY.py
-send_logs_to_user.py
 clear_*.py
 diagnose_*.py
 migrate_*.py

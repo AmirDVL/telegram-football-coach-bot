@@ -49,7 +49,7 @@ class AdminPanel:
             
             # Log callback attempt for debugging
             await admin_debugger.log_callback_attempt(
-                user_id, query.data, {"success": True}
+                update, query.data, user_id, success=True
             )
             
             # Log admin action
@@ -69,7 +69,7 @@ class AdminPanel:
         except Exception as e:
             # Log the error with full context
             await admin_debugger.log_callback_attempt(
-                user_id, query.data, {"success": False, "error": str(e)}
+                update, query.data, user_id, success=False, error=str(e)
             )
             
             # Handle the error gracefully
@@ -109,14 +109,20 @@ class AdminPanel:
             await self.show_users_management(query, page)
         elif callback_data == 'admin_payments':
             await self.show_payments_management(query)
-        elif callback_data == 'admin_pending_payments':
-            await self.show_pending_payments(query)
         elif callback_data == 'admin_export_menu':
             await self.show_export_menu(query)
         elif callback_data == 'admin_coupons':
             await self.show_coupon_management(query)
         elif callback_data == 'admin_plans':
             await self.show_plan_management(query)
+        elif callback_data == 'admin_maintenance':
+            await self.show_maintenance_menu(query)
+        elif callback_data == 'validate_file_ids':
+            await self.handle_validate_file_ids(query, context)
+        elif callback_data == 'system_health_check':
+            await self.handle_system_health_check(query)
+        elif callback_data == 'cleanup_temp_files':
+            await self.handle_cleanup_temp_files(query)
             
         # New plan management callbacks - Person-centric approach
         elif callback_data.startswith('user_plans_'):
@@ -789,7 +795,8 @@ class AdminPanel:
             [InlineKeyboardButton("💳 مدیریت پرداخت‌ها", callback_data='admin_payments'),
              InlineKeyboardButton(" اکسپورت داده‌ها", callback_data='admin_export_menu')],
             [InlineKeyboardButton("🎟️ مدیریت کوپن", callback_data='admin_coupons'),
-             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')]
+             InlineKeyboardButton("📋 مدیریت برنامه‌ها", callback_data='admin_plans')],
+            [InlineKeyboardButton("🔧 تعمیر و نگهداری", callback_data='admin_maintenance')]
         ]
         
         if can_manage_admins:
@@ -3166,6 +3173,10 @@ class AdminPanel:
             
             if plan_content:
                 try:
+                    # Validate file_id format first
+                    if not isinstance(plan_content, str) or len(plan_content) < 10:
+                        raise ValueError("Invalid file_id format")
+                    
                     # Send using Telegram file_id directly
                     caption = f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n📄 فایل: {plan_filename}\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
                     
@@ -3190,9 +3201,36 @@ class AdminPanel:
                     )
                     
                 except Exception as send_error:
+                    error_message = str(send_error)
+                    
+                    # Handle specific Telegram API errors
+                    if "Wrong type of the web page content" in error_message:
+                        error_details = "❌ فایل معتبر نیست یا منقضی شده است.\n\n🔧 راه حل:\n• از منوی تعمیر و نگهداری، گزینه 'بررسی فایل‌ها' را اجرا کنید\n• یا برنامه را مجدداً آپلود کنید"
+                        
+                        # Also mark this plan as needing reupload
+                        plan['content_status'] = 'invalid_file_id'
+                        plan['content_error'] = error_message
+                        plan['needs_reupload'] = True
+                        
+                    elif "file_id" in error_message.lower():
+                        error_details = "❌ شناسه فایل معتبر نیست.\n\n🔧 راه حل: لطفاً فایل را مجدداً آپلود کنید."
+                    elif "Bad Request" in error_message:
+                        error_details = "❌ خطا در درخواست ارسال.\n\n🔧 ممکن است فایل خراب یا نامعتبر باشد."
+                    elif "Forbidden" in error_message:
+                        error_details = "❌ کاربر ربات را مسدود کرده است یا دسترسی رد شده."
+                    elif "network" in error_message.lower() or "timeout" in error_message.lower():
+                        error_details = "❌ خطا در اتصال شبکه. لطفاً مجدداً تلاش کنید."
+                    else:
+                        error_details = f"❌ خطا در ارسال: {error_message}"
+                    
+                    # Log the detailed error for debugging
+                    logging.error(f"Error sending plan to user {user_id}: {error_message}")
+                    logging.error(f"Plan details - ID: {plan_id}, Content: {plan_content[:50]}..., Type: {plan_content_type}")
+                    
                     await query.edit_message_text(
-                        f"❌ خطا در ارسال برنامه: {str(send_error)}",
+                        f"{error_details}\n\n💡 راه حل:\n• برنامه را دوباره آپلود کنید\n• از فرمت‌های معتبر استفاده کنید (PDF، JPG، PNG)\n• اندازه فایل کمتر از 50MB باشد",
                         reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 آپلود مجدد", callback_data=f'upload_user_plan_{user_id}_{course_code}')],
                             [InlineKeyboardButton("🔙 بازگشت", callback_data=f'manage_user_course_{user_id}_{course_code}')]
                         ])
                     )
@@ -3795,6 +3833,186 @@ class AdminPanel:
         
         return escaped_text
     
+    async def validate_and_cleanup_file_ids(self, context) -> dict:
+        """Validate all stored file_ids and clean up invalid ones"""
+        results = {
+            'total_plans': 0,
+            'invalid_file_ids': 0,
+            'cleaned_plans': [],
+            'errors': [],
+            'course_plans_checked': 0,
+            'user_plans_checked': 0  
+        }
+        
+        try:
+            # Check course plans (global plan pool)
+            course_plans_dir = 'admin_data/course_plans'
+            if os.path.exists(course_plans_dir):
+                course_types = ['online_weights', 'online_cardio', 'online_combo', 'in_person_cardio', 'in_person_weights', 'nutrition_plan']
+                plans_updated = False
+                
+                for course_type in course_types:
+                    plans_file = f'{course_plans_dir}/{course_type}.json'
+                    if os.path.exists(plans_file):
+                        try:
+                            with open(plans_file, 'r', encoding='utf-8') as f:
+                                course_plans = json.load(f)
+                            
+                            results['course_plans_checked'] += 1
+                            
+                            for plan in course_plans:
+                                results['total_plans'] += 1
+                                
+                                plan_content = plan.get('content')
+                                if plan_content and isinstance(plan_content, str):
+                                    try:
+                                        # Test if file_id is valid by attempting to get file info  
+                                        await context.bot.get_file(plan_content)
+                                        
+                                    except Exception as e:
+                                        # File_id is invalid
+                                        results['invalid_file_ids'] += 1
+                                        error_msg = str(e)
+                                        
+                                        if "Wrong type of the web page content" in error_msg or "file not found" in error_msg.lower():
+                                            # Mark plan as having invalid file_id
+                                            plan['content_status'] = 'invalid_file_id' 
+                                            plan['content_error'] = error_msg
+                                            plan['needs_reupload'] = True
+                                            plans_updated = True
+                                            
+                                            results['cleaned_plans'].append({
+                                                'location': 'course_plans',
+                                                'course_type': course_type,
+                                                'plan_id': plan.get('id', 'unknown'),
+                                                'title': plan.get('title', 'بدون عنوان'),
+                                                'error': error_msg[:100] + '...' if len(error_msg) > 100 else error_msg
+                                            })
+                            
+                            # Save updated course plans if any invalid file_ids found
+                            if plans_updated:
+                                with open(plans_file, 'w', encoding='utf-8') as f:
+                                    json.dump(course_plans, f, ensure_ascii=False, indent=2)
+                        
+                        except Exception as e:
+                            results['errors'].append(f"Error checking {course_type}: {str(e)}")
+            
+            # Check user-specific plans
+            if os.path.exists('user_plans.json'):
+                try:
+                    with open('user_plans.json', 'r', encoding='utf-8') as f:
+                        plan_data = json.load(f)
+                    
+                    results['user_plans_checked'] = 1
+                    user_plans_updated = False
+                    
+                    for user_id, user_plans in plan_data.items():
+                        for course_code, course_plans in user_plans.items():
+                            for plan_id, plan in course_plans.items():
+                                results['total_plans'] += 1
+                                
+                                plan_content = plan.get('content')
+                                if plan_content and isinstance(plan_content, str):
+                                    try:
+                                        # Test if file_id is valid by attempting to get file info
+                                        await context.bot.get_file(plan_content)
+                                        
+                                    except Exception as e:
+                                        # File_id is invalid
+                                        results['invalid_file_ids'] += 1
+                                        error_msg = str(e)
+                                        
+                                        if "Wrong type of the web page content" in error_msg or "file not found" in error_msg.lower():
+                                            # Mark plan as having invalid file_id
+                                            plan['content_status'] = 'invalid_file_id'
+                                            plan['content_error'] = error_msg
+                                            plan['needs_reupload'] = True
+                                            user_plans_updated = True
+                                            
+                                            results['cleaned_plans'].append({
+                                                'location': 'user_plans',
+                                                'user_id': user_id,
+                                                'course_code': course_code,
+                                                'plan_id': plan_id,
+                                                'title': plan.get('title', 'بدون عنوان'),
+                                                'error': error_msg[:100] + '...' if len(error_msg) > 100 else error_msg
+                                            })
+                    
+                    # Save updated user plans data
+                    if user_plans_updated:
+                        with open('user_plans.json', 'w', encoding='utf-8') as f:
+                            json.dump(plan_data, f, ensure_ascii=False, indent=2)
+                
+                except Exception as e:
+                    results['errors'].append(f"Error checking user_plans.json: {str(e)}")
+            else:
+                results['errors'].append("user_plans.json not found")
+            
+            if results['invalid_file_ids'] > 0:
+                logger.info(f"Cleaned up {results['invalid_file_ids']} invalid file_ids from plans")
+            
+        except Exception as e:
+            results['errors'].append(f"Error during validation: {str(e)}")
+            logger.error(f"Error validating file_ids: {e}")
+        
+        return results
+    
+    async def show_file_validation_results(self, query, validation_results: dict):
+        """Show results of file_id validation to admin"""
+        total = validation_results['total_plans']
+        invalid = validation_results['invalid_file_ids']
+        course_plans_checked = validation_results.get('course_plans_checked', 0)
+        user_plans_checked = validation_results.get('user_plans_checked', 0)
+        
+        if invalid == 0:
+            text = f"✅ تمام فایل‌ها معتبر هستند!\n\n📊 آمار:\n• تعداد کل برنامه‌ها: {total}\n• فایل‌های معتبر: {total}\n• فایل‌های نامعتبر: 0\n\n🔍 منابع بررسی شده:\n• پول برنامه‌ها: {course_plans_checked} نوع دوره\n• برنامه‌های کاربران: {'✅' if user_plans_checked > 0 else '❌'}"
+        else:
+            text = f"⚠️ فایل‌های نامعتبر یافت شد!\n\n📊 آمار:\n• تعداد کل برنامه‌ها: {total}\n• فایل‌های معتبر: {total - invalid}\n• فایل‌های نامعتبر: {invalid}\n\n🔍 منابع بررسی شده:\n• پول برنامه‌ها: {course_plans_checked} نوع دوره\n• برنامه‌های کاربران: {'✅' if user_plans_checked > 0 else '❌'}\n\n"
+            
+            if validation_results['cleaned_plans']:
+                text += "📋 برنامه‌های نیازمند آپلود مجدد:\n"
+                for i, plan in enumerate(validation_results['cleaned_plans'][:5], 1):  # Show first 5
+                    location_icon = "🏊‍♂️" if plan['location'] == 'course_plans' else "👤"
+                    if plan['location'] == 'course_plans':
+                        text += f"{i}. {location_icon} {plan['title']} (دوره: {plan.get('course_type', 'نامشخص')})\n"
+                    else:
+                        text += f"{i}. {location_icon} {plan['title']} (کاربر: {plan.get('user_id', 'نامشخص')})\n"
+                
+                if len(validation_results['cleaned_plans']) > 5:
+                    text += f"... و {len(validation_results['cleaned_plans']) - 5} برنامه دیگر\n"
+                
+                text += "\n💡 برنامه‌های نامعتبر با علامت 'needs_reupload' مشخص شده‌اند"
+        
+        if validation_results['errors']:
+            text += f"\n❌ خطاها:\n" + "\n".join(validation_results['errors'][:3])
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 تست مجدد", callback_data='validate_file_ids')],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def show_maintenance_menu(self, query):
+        """Show system maintenance menu"""
+        text = """🔧 سیستم تعمیر و نگهداری
+        
+⚙️ ابزارهای تشخیص و رفع مشکل:
+
+• 🔍 بررسی فایل‌ها - تشخیص فایل‌های نامعتبر
+• 📊 بررسی سلامت سیستم  
+• 🧹 پاکسازی فایل‌های موقت
+• 📋 گزارش وضعیت کلی"""
+        
+        keyboard = [
+            [InlineKeyboardButton("🔍 بررسی فایل‌ها", callback_data='validate_file_ids')],
+            [InlineKeyboardButton("📊 بررسی سلامت", callback_data='system_health_check')],
+            [InlineKeyboardButton("🧹 پاکسازی", callback_data='cleanup_temp_files')],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
     def _get_course_name_farsi(self, course_code: str) -> str:
         """Convert course code to Persian name"""
         course_names = {
@@ -3807,3 +4025,172 @@ class AdminPanel:
             'انتخاب نشده': 'انتخاب نشده'
         }
         return course_names.get(course_code, course_code)
+    
+    async def handle_validate_file_ids(self, query, context):
+        """Handle file_id validation request"""
+        await query.answer("🔍 در حال بررسی فایل‌ها...")
+        
+        # Show progress message
+        await query.edit_message_text(
+            "🔍 در حال بررسی معتبر بودن فایل‌ها...\n\n⏳ لطفاً صبر کنید، این عملیات ممکن است چند دقیقه طول بکشد.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ لغو", callback_data='admin_maintenance')]
+            ])
+        )
+        
+        try:
+            # Run validation
+            validation_results = await self.validate_and_cleanup_file_ids(context)
+            
+            # Show results
+            await self.show_file_validation_results(query, validation_results)
+            
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ خطا در بررسی فایل‌ها: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+                ])
+            )
+    
+    async def handle_system_health_check(self, query):
+        """Handle system health check request"""
+        await query.answer("📊 در حال بررسی سلامت سیستم...")
+        
+        try:
+            import psutil
+            import os
+            
+            # Get system info
+            memory_info = psutil.virtual_memory()
+            disk_info = psutil.disk_usage('.')
+            
+            # Check critical files
+            critical_files = ['bot_data.json', 'user_plans.json', 'admins.json']
+            file_status = []
+            
+            for file_path in critical_files:
+                if os.path.exists(file_path):
+                    size = os.path.getsize(file_path)
+                    status = f"✅ {file_path} ({size:,} bytes)"
+                else:
+                    status = f"❌ {file_path} (غایب)"
+                file_status.append(status)
+            
+            text = f"""📊 گزارش سلامت سیستم
+            
+🖥️ **حافظه:**
+• کل: {memory_info.total // (1024**3):.1f} GB
+• استفاده: {memory_info.percent:.1f}%
+• در دسترس: {memory_info.available // (1024**3):.1f} GB
+
+💾 **فضای ذخیره:**
+• کل: {disk_info.total // (1024**3):.1f} GB  
+• استفاده: {(disk_info.used / disk_info.total) * 100:.1f}%
+• آزاد: {disk_info.free // (1024**3):.1f} GB
+
+📁 **فایل‌های حیاتی:**
+{chr(10).join(file_status)}
+
+⏰ **زمان چک:** {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}"""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 بروزرسانی", callback_data='system_health_check')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+            ]
+            
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ خطا در بررسی سلامت: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+                ])
+            )
+    
+    async def handle_cleanup_temp_files(self, query):
+        """Handle temporary files cleanup"""
+        await query.answer("🧹 در حال پاکسازی...")
+        
+        try:
+            import os
+            import tempfile
+            import shutil
+            
+            cleaned_files = 0
+            freed_space = 0
+            
+            # Clean temp directory
+            temp_dir = tempfile.gettempdir()
+            for filename in os.listdir(temp_dir):
+                if filename.startswith('temp_doc_') or filename.startswith('temp_photo_'):
+                    file_path = os.path.join(temp_dir, filename)
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        os.remove(file_path)
+                        cleaned_files += 1
+                        freed_space += file_size
+                    except:
+                        pass
+            
+            # Clean backup directory if it exists
+            backup_dir = 'backups'
+            if os.path.exists(backup_dir):
+                for filename in os.listdir(backup_dir):
+                    if filename.endswith('_CORRUPTED.json'):
+                        file_path = os.path.join(backup_dir, filename)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            os.remove(file_path)
+                            cleaned_files += 1
+                            freed_space += file_size
+                        except:
+                            pass
+            
+            text = f"""🧹 نتیجه پاکسازی
+            
+✅ **انجام شد:**
+• {cleaned_files} فایل موقت حذف شد
+• {freed_space // 1024:.1f} KB فضا آزاد شد
+
+⏰ **زمان:** {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}"""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 پاکسازی مجدد", callback_data='cleanup_temp_files')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+            ]
+            
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ خطا در پاکسازی: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+                ])
+            )
+    
+    async def show_file_validation_results(self, query, results):
+        """Show file validation results"""
+        if not results:
+            text = "✅ همه فایل‌ها معتبر هستند!"
+        else:
+            invalid_count = len(results.get('invalid_file_ids', []))
+            cleaned_count = len(results.get('cleaned_plans', []))
+            
+            text = f"""📊 نتایج بررسی فایل‌ها
+            
+❌ **فایل‌های نامعتبر:** {invalid_count}
+🧹 **برنامه‌های پاکسازی شده:** {cleaned_count}
+
+✅ **وضعیت:** {"همه فایل‌ها اکنون معتبر هستند" if cleaned_count > 0 else "نیازی به پاکسازی نبود"}
+
+⏰ **زمان بررسی:** {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}"""
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 بررسی مجدد", callback_data='validate_file_ids')],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_maintenance')]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))

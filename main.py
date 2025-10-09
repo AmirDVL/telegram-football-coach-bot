@@ -5010,8 +5010,18 @@ class FootballCoachBot:
                 await query.answer("❌ فایل برنامه یافت نشد!", show_alert=True)
         
         except Exception as e:
+            error_message = str(e)
             logger.error(f"Error sending main plan to user {user_id}: {e}")
-            await query.answer("❌ خطا در ارسال برنامه!", show_alert=True)
+            
+            # Provide specific error feedback to user
+            if "Wrong type of the web page content" in error_message:
+                await query.answer("⚠️ فایل در دسترس نیست - لطفاً با پشتیبانی تماس بگیرید", show_alert=True)
+            elif "file_id" in error_message.lower():
+                await query.answer("⚠️ فایل موقتاً در دسترس نیست - لطفاً بعداً تلاش کنید", show_alert=True)
+            elif "Forbidden" in error_message:
+                await query.answer("❌ خطا در دسترسی - لطفاً ربات را مجدد راه‌اندازی کنید", show_alert=True)
+            else:
+                await query.answer("❌ خطا در ارسال برنامه - لطفاً مجدداً تلاش کنید", show_alert=True)
 
     async def show_support_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show support contact information"""
