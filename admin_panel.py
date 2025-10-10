@@ -6,7 +6,6 @@ from coupon_manager import CouponManager
 from config import Config
 from admin_error_handler import admin_error_handler
 from admin_debugger import admin_debugger
-from bot_logger import bot_logger
 import json
 import csv
 import io
@@ -3626,24 +3625,24 @@ class AdminPanel:
             await query.answer()
             user_id = query.from_user.id
             
-            bot_logger.info(f"🔄 SKIP_DESCRIPTION - User {user_id} skipping description")
-            bot_logger.info(f"🔍 Context check: context={context is not None}, user_data={user_id in context.user_data if context else 'N/A'}")
+            logger.info(f"🔄 SKIP_DESCRIPTION - User {user_id} skipping description")
+            logger.info(f"🔍 Context check: context={context is not None}, user_data={user_id in context.user_data if context else 'N/A'}")
             
             # Set empty description and complete upload
             if context and user_id in context.user_data:
                 context.user_data[user_id]['plan_description'] = ''
-                bot_logger.info(f"✅ Set empty description for user {user_id}")
-                bot_logger.info(f"📦 User data keys: {list(context.user_data[user_id].keys())}")
+                logger.info(f"✅ Set empty description for user {user_id}")
+                logger.info(f"📦 User data keys: {list(context.user_data[user_id].keys())}")
             else:
-                bot_logger.error(f"❌ No context or user_data for user {user_id}")
+                logger.error(f"❌ No context or user_data for user {user_id}")
                 await query.message.reply_text("❌ خطای سیستم! لطفاً از ابتدا شروع کنید.")
                 return
             
             # Get bot instance from context instead of importing main
             bot = context.bot_data.get('bot_instance') if context else None
-            bot_logger.info(f"🤖 Bot instance: {bot is not None}")
+            logger.info(f"🤖 Bot instance: {bot is not None}")
             if not bot:
-                bot_logger.error("❌ Bot instance not found in context.bot_data")
+                logger.error("❌ Bot instance not found in context.bot_data")
                 await query.message.reply_text("❌ خطای سیستم! لطفاً مجددا تلاش کنید.")
                 return
             
@@ -3658,13 +3657,13 @@ class AdminPanel:
                     self.effective_user = EffectiveUser(user_id)
                     self.message = message
             
-            bot_logger.info(f"🚀 Calling complete_plan_upload for user {user_id}")
+            logger.info(f"🚀 Calling complete_plan_upload for user {user_id}")
             dummy_update = DummyUpdate(user_id, query.message)
             await bot.complete_plan_upload(dummy_update, context)
-            bot_logger.info(f"✅ complete_plan_upload finished for user {user_id}")
+            logger.info(f"✅ complete_plan_upload finished for user {user_id}")
             
         except Exception as e:
-            bot_logger.error(f"❌ Exception in skip_plan_description: {type(e).__name__}: {str(e)}")
+            logger.error(f"❌ Exception in skip_plan_description: {type(e).__name__}: {str(e)}")
             await admin_error_handler.log_admin_error(
                 user_id, e, "callback_query:skip_plan_description", update=None
             )
