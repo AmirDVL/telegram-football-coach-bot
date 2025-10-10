@@ -3118,7 +3118,7 @@ class AdminPanel:
                 context.user_data[admin_id] = {}
             context.user_data[admin_id]['uploading_user_plan'] = True
             context.user_data[admin_id]['plan_user_id'] = user_id
-            context.user_data[admin_id]['plan_course_code'] = course_code
+            context.user_data[admin_id]['plan_course_type'] = course_code  # Fixed: was plan_course_code
             context.user_data[admin_id]['plan_upload_step'] = 'title'
         
         text = f"""📤 آپلود برنامه شخصی
