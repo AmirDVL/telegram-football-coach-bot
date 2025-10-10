@@ -517,8 +517,13 @@ class FootballCoachBot:
                 self.admin_panel, user_id, "/start command - ADMIN HUB REDIRECT"
             )
             
+            # Also clear any in-progress plan upload states
+            plan_upload_states_cleared = await admin_error_handler.clear_admin_plan_upload_states(
+                context, user_id, "/start command - force navigation"
+            )
+            
             # ALWAYS redirect admins to admin hub - no exceptions
-            logger.info(f"🔧 ADMIN /start - User {user_id} redirected to admin hub | Context states: {states_cleared} | Admin states: {admin_states_cleared} | Preserved payment data - no corruption")
+            logger.info(f"🔧 ADMIN /start - User {user_id} redirected to admin hub | Context states: {states_cleared} | Admin states: {admin_states_cleared} | Plan upload states: {len(plan_upload_states_cleared)} | Preserved payment data - no corruption")
             await self.admin_panel.show_admin_hub_for_command(update, context, user_id)
             return
         

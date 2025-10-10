@@ -790,7 +790,7 @@ class AdminErrorHandler:
 
     async def clear_admin_input_states(self, admin_panel_instance, user_id: int, navigation_context: str = "unknown"):
         """
-        Clear admin-specific input states from admin panel
+        Clear admin-specific input states from admin panel and context.user_data
         """
         admin_states_cleared = []
         
@@ -814,6 +814,43 @@ class AdminErrorHandler:
             )
         
         return admin_states_cleared
+    
+    async def clear_admin_plan_upload_states(self, context, user_id: int, reason: str = "navigation"):
+        """
+        Clear plan upload states from context.user_data to prevent stuck upload modes
+        Should be called when admin navigates away (e.g., /start command)
+        """
+        states_cleared = []
+        
+        if user_id in context.user_data:
+            upload_states = [
+                'uploading_plan',
+                'uploading_user_plan', 
+                'plan_course_type',
+                'plan_course_code',
+                'plan_user_id',
+                'plan_upload_step',
+                'plan_title',
+                'plan_content',
+                'plan_content_type',
+                'plan_filename',
+                'plan_description',
+                'plan_local_path',
+                'plan_file_size'
+            ]
+            
+            for state in upload_states:
+                if state in context.user_data[user_id]:
+                    context.user_data[user_id].pop(state, None)
+                    states_cleared.append(state)
+        
+        if states_cleared:
+            self.admin_logger.info(
+                f"PLAN UPLOAD STATE CLEARING - Admin {user_id} | Reason: {reason} | "
+                f"Cleared {len(states_cleared)} states: {', '.join(states_cleared)}"
+            )
+        
+        return states_cleared
 
     async def log_questionnaire_flow_debug(self, user_id: int, context: str, questionnaire_data: dict, 
                                           flow_decision: str, details: dict = None):
