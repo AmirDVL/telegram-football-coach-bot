@@ -6,6 +6,7 @@ from coupon_manager import CouponManager
 from config import Config
 from admin_error_handler import admin_error_handler
 from admin_debugger import admin_debugger
+from bot_logger import bot_logger
 import json
 import csv
 import io
