@@ -3647,13 +3647,18 @@ class AdminPanel:
                 return
             
             # Create a dummy update object for complete_plan_upload
-            class DummyUpdate:
+            # Need to create proper effective_user object
+            class EffectiveUser:
                 def __init__(self, user_id):
-                    self.effective_user = type('', (), {'id': user_id})()
-                    self.message = query.message
+                    self.id = user_id
+            
+            class DummyUpdate:
+                def __init__(self, user_id, message):
+                    self.effective_user = EffectiveUser(user_id)
+                    self.message = message
             
             bot_logger.info(f"🚀 Calling complete_plan_upload for user {user_id}")
-            dummy_update = DummyUpdate(user_id)
+            dummy_update = DummyUpdate(user_id, query.message)
             await bot.complete_plan_upload(dummy_update, context)
             bot_logger.info(f"✅ complete_plan_upload finished for user {user_id}")
             
