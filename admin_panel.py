@@ -3663,8 +3663,9 @@ class AdminPanel:
             bot_logger.info(f"✅ complete_plan_upload finished for user {user_id}")
             
         except Exception as e:
+            bot_logger.error(f"❌ Exception in skip_plan_description: {type(e).__name__}: {str(e)}")
             await admin_error_handler.log_admin_error(
-                user_id, e, "skip_plan_description", query
+                user_id, e, "callback_query:skip_plan_description", update=None
             )
             await query.message.reply_text("❌ خطا در رد کردن توضیحات! لطفاً مجددا تلاش کنید.")
 
