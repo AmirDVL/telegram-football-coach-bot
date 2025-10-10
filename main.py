@@ -1720,11 +1720,14 @@ class FootballCoachBot:
         plans_before.append(plan_data)
         
         # Save plans
+        logger.info(f"💾 ABOUT TO SAVE - course_type={course_type}, plans_count={len(plans_before)}")
         success = await self.admin_panel.save_course_plans(course_type, plans_before)
+        logger.info(f"💾 SAVE RETURNED - success={success}")
         
         # Verify save by loading again
         plans_after = await self.admin_panel.load_course_plans(course_type)
         plans_after_count = len(plans_after)
+        logger.info(f"🔍 VERIFICATION - plans_before={plans_before_count}, plans_after={plans_after_count}")
         
         # Log save result
         await admin_error_handler.log_plan_upload_workflow(
