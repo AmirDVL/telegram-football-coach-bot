@@ -3625,13 +3625,24 @@ class AdminPanel:
             await query.answer()
             user_id = query.from_user.id
             
+            bot_logger.info(f"🔄 SKIP_DESCRIPTION - User {user_id} skipping description")
+            bot_logger.info(f"🔍 Context check: context={context is not None}, user_data={user_id in context.user_data if context else 'N/A'}")
+            
             # Set empty description and complete upload
             if context and user_id in context.user_data:
                 context.user_data[user_id]['plan_description'] = ''
+                bot_logger.info(f"✅ Set empty description for user {user_id}")
+                bot_logger.info(f"📦 User data keys: {list(context.user_data[user_id].keys())}")
+            else:
+                bot_logger.error(f"❌ No context or user_data for user {user_id}")
+                await query.message.reply_text("❌ خطای سیستم! لطفاً از ابتدا شروع کنید.")
+                return
             
             # Get bot instance from context instead of importing main
             bot = context.bot_data.get('bot_instance') if context else None
+            bot_logger.info(f"🤖 Bot instance: {bot is not None}")
             if not bot:
+                bot_logger.error("❌ Bot instance not found in context.bot_data")
                 await query.message.reply_text("❌ خطای سیستم! لطفاً مجددا تلاش کنید.")
                 return
             
@@ -3641,8 +3652,10 @@ class AdminPanel:
                     self.effective_user = type('', (), {'id': user_id})()
                     self.message = query.message
             
+            bot_logger.info(f"🚀 Calling complete_plan_upload for user {user_id}")
             dummy_update = DummyUpdate(user_id)
             await bot.complete_plan_upload(dummy_update, context)
+            bot_logger.info(f"✅ complete_plan_upload finished for user {user_id}")
             
         except Exception as e:
             await admin_error_handler.log_admin_error(
