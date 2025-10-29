@@ -88,8 +88,11 @@ venv_prod/
 *.sqlite*
 *.sql
 !schema.sql
-database/
+# Allow src/database/ directory
+!src/database/
+# Block data/ except templates
 data/
+!data/templates/
 
 # =================================================================
 # DEVELOPMENT & DEBUG FILES - PRODUCTION EXCLUDES

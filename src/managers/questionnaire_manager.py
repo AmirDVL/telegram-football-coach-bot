@@ -312,12 +312,12 @@ class QuestionnaireManager:
         elif question["type"] == "photo":
             # Photo questions should only accept photos, not text
             # Use unified input validator for consistent error messages
-            from input_validator import input_validator
+            from utils.input_validator import input_validator
             return False, input_validator.get_input_type_error('photo')
 
         elif question["type"] == "document":
             # Document questions should only accept documents, not text
-            from input_validator import input_validator
+            from utils.input_validator import input_validator
             return False, input_validator.get_input_type_error('document')
 
         return True, ""
@@ -699,7 +699,7 @@ class QuestionnaireManager:
                 filename = f"photo_{timestamp}_{len(progress['answers'].get('photos', {}).get(str(current_step), []))}.jpg"
                 
                 # Use image processor to compress and save
-                from image_processor import ImageProcessor
+                from utils.image_processor import ImageProcessor
                 image_processor = ImageProcessor()
                 local_photo_path = await image_processor.save_compressed_image(
                     bytes(photo_bytes), 

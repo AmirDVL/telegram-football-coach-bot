@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-from config import Config
+from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +348,7 @@ class DatabaseManager:
     
     async def sync_admins_from_config(self):
         """Sync admins from environment config on startup"""
-        from config import Config
+        from bot.config import Config
         
         admin_ids = Config.get_admin_ids()
         if not admin_ids:

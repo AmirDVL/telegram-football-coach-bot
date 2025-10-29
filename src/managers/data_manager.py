@@ -155,7 +155,7 @@ class DataManager:
     async def sync_admins_from_config(self):
         """Sync admins from Config.ADMIN_IDS to data store"""
         try:
-            from config import Config
+            from bot.config import Config
             
             # Get admin IDs from config
             admin_ids = Config.get_admin_ids()

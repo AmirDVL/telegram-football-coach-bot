@@ -32,19 +32,19 @@ A sophisticated Persian Telegram bot for football training course management wit
 
 ## 🏗️ Architecture
 
-### Core Files
+The bot follows a clean, modular architecture organized in the `src/` directory:
+
 ```
-main.py                    # Main bot application
-├── config.py             # Configuration management
-├── data_manager.py       # Data persistence layer
-├── questionnaire_manager.py # Questionnaire system
-├── admin_panel.py        # Admin interface
-├── admin_manager.py      # Admin user management
-├── coupon_manager.py     # Discount system
-├── image_processor.py    # Image handling
-├── database_manager.py   # Database operations
-└── bot_logger.py         # Logging system
+src/
+├── bot/          # Core bot application and configuration
+├── admin/        # Admin panel and management
+├── managers/     # Business logic (data, questionnaire, coupons, plans)
+├── database/     # Database operations
+├── utils/        # Utilities (image processing, CSV export, validation)
+└── security/     # Security features and monitoring
 ```
+
+See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for detailed structure.
 
 ### Data Storage
 - **JSON Mode** (Default): File-based storage for development
@@ -82,11 +82,14 @@ ADMIN_ID=your_telegram_user_id
 
 ```bash
 # Development mode (JSON storage)
-python main.py
+python run.py
+
+# Or directly:
+python -m src.bot.main
 
 # Production mode (PostgreSQL)
 export USE_DATABASE=true
-python main.py
+./scripts/startup.sh
 ```
 
 ## 📊 User Flow
@@ -117,7 +120,11 @@ python main.py
 
 ## 📁 Documentation
 
-- **[Deployment Guide](DEPLOYMENT_GUIDE.md)**: Production setup instructions
+- **[Project Structure](docs/PROJECT_STRUCTURE.md)**: Detailed codebase organization
+- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)**: Production setup instructions
+- **[BotFather Setup](docs/BOTFATHER_SETUP.md)**: Bot creation steps
+- **[GitHub Setup](docs/GITHUB_SETUP.md)**: Repository configuration
+- **[Hosting Options](docs/HOSTING_OPTIONS.md)**: Server recommendations
 - **[BotFather Setup](BOTFATHER_SETUP.md)**: Telegram bot configuration
 - **[File Storage](FILE_STORAGE_DOCUMENTATION.md)**: Data management details
 

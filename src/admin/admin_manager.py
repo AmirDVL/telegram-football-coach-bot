@@ -13,7 +13,7 @@ class AdminManager:
         """Ensure admins file exists - all ADMIN_IDS are super admins"""
         if not os.path.exists(self.admins_file):
             # Get initial admins from .env - all are super admins
-            from config import Config
+            from bot.config import Config
             initial_admins = Config.get_admin_ids()
             
             if initial_admins:
@@ -255,7 +255,7 @@ class AdminManager:
             # Only demote if this admin is currently the super admin
             if admins_data.get('super_admin') == admin_id:
                 # Find another admin to promote (prefer first in env)
-                from config import Config
+                from bot.config import Config
                 env_admin_ids = Config.get_admin_ids()
                 new_super_admin = env_admin_ids[0] if env_admin_ids else None
                 
@@ -281,7 +281,7 @@ class AdminManager:
     async def sync_admins_from_config(self, specific_admin_ids=None):
         """Comprehensive admin sync from Config.ADMIN_IDS - all ADMIN_IDS are super admins"""
         try:
-            from config import Config
+            from bot.config import Config
             
             # Get admin IDs from config - all are super admins now
             admin_ids = specific_admin_ids or Config.get_admin_ids()

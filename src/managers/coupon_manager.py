@@ -5,7 +5,7 @@ import json
 import os
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
-from config import Config
+from bot.config import Config
 
 class CouponManager:
     def __init__(self, data_file: str = "coupons.json"):

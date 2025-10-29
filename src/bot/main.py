@@ -10,14 +10,14 @@ import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-from config import Config
-from data_manager import DataManager
-from database_manager import DatabaseManager
-from admin_panel import AdminPanel
-from questionnaire_manager import QuestionnaireManager
-from image_processor import ImageProcessor
-from coupon_manager import CouponManager
-from admin_error_handler import admin_error_handler
+from bot.config import Config
+from managers.data_manager import DataManager
+from database.database_manager import DatabaseManager
+from admin.admin_panel import AdminPanel
+from managers.questionnaire_manager import QuestionnaireManager
+from utils.image_processor import ImageProcessor
+from managers.coupon_manager import CouponManager
+from admin.admin_error_handler import admin_error_handler
 
 # Enhanced logging configuration
 def setup_enhanced_logging():
@@ -250,7 +250,7 @@ class FootballCoachBot:
                 await self.data_manager.initialize()
             
             # Setup admin directory structure
-            from admin_error_handler import admin_error_handler
+            from admin.admin_error_handler import admin_error_handler
             await admin_error_handler.setup_admin_directories()
             
             # Migrate legacy admin files to organized structure
@@ -623,7 +623,7 @@ class FootballCoachBot:
             
             # DEBUG LOGGING for questionnaire flow
             questionnaire_status = quest_req_status['questionnaire_status']
-            from admin_error_handler import admin_error_handler
+            from admin.admin_error_handler import admin_error_handler
             await admin_error_handler.log_questionnaire_flow_debug(
                 user_id=user_id,
                 context='payment_approved_status_menu',
@@ -1396,7 +1396,7 @@ class FootballCoachBot:
         admin_context = context.user_data.get(user_id, {})
         
         # UNIFIED INPUT TYPE VALIDATION for admin operations
-        from input_validator import input_validator
+        from utils.input_validator import input_validator
         
         upload_step = admin_context.get('plan_upload_step')
         
@@ -1510,7 +1510,7 @@ class FootballCoachBot:
             # Validate file type (similar to questionnaire system)
             if filename.lower().endswith(('.pdf', '.txt', '.doc', '.docx')):
                 # Download and save file locally
-                from plan_file_manager import plan_file_manager
+                from managers.plan_file_manager import plan_file_manager
                 course_type = context.user_data[user_id].get('plan_course_type', 'general')
                 
                 file_info = await plan_file_manager.download_and_save_plan(
@@ -1605,7 +1605,7 @@ class FootballCoachBot:
             photo = update.message.photo[-1]  # Get highest resolution
             
             # Download and save photo locally
-            from plan_file_manager import plan_file_manager
+            from managers.plan_file_manager import plan_file_manager
             course_type = context.user_data[user_id].get('plan_course_type', 'general')
             
             # Generate a filename for the photo
@@ -2360,7 +2360,7 @@ class FootballCoachBot:
                 else:
                     # User sent photo but different input type is expected (text, number, etc.)
                     logger.debug(f"❌ PHOTO ROUTER - User {user_id} sent photo for {question_type} question - showing error")
-                    from input_validator import input_validator
+                    from utils.input_validator import input_validator
                     
                     is_valid = await input_validator.validate_and_reject_wrong_input_type(
                         update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
@@ -2370,7 +2370,7 @@ class FootballCoachBot:
         # PRIORITY 3: Check if user is waiting for coupon code (not photo)
         if user_context.get('waiting_for_coupon'):
             logger.debug(f"💰 PHOTO ROUTER - User {user_id} sent photo while waiting for coupon - showing error")
-            from input_validator import input_validator
+            from utils.input_validator import input_validator
             
             await input_validator.validate_and_reject_wrong_input_type(
                 update, 'coupon_code', "ورود کد تخفیف", is_admin=False
@@ -2866,7 +2866,7 @@ class FootballCoachBot:
             question_type = current_question.get("type")
             
             # UNIFIED INPUT TYPE VALIDATION for questionnaire documents
-            from input_validator import input_validator
+            from utils.input_validator import input_validator
             
             if question_type == "photo":
                 # User sent document but photo is expected
@@ -2990,7 +2990,7 @@ class FootballCoachBot:
                 logger.debug(f"❌ UNSUPPORTED FILE - User {user_id} sent unsupported file for {question_type} question - showing error")
                 
                 # UNIFIED INPUT TYPE VALIDATION for unsupported files
-                from input_validator import input_validator
+                from utils.input_validator import input_validator
                 
                 is_valid = await input_validator.validate_and_reject_wrong_input_type(
                     update, question_type, f"پرسشنامه - سوال {current_question.get('step', '?')}", is_admin=False
@@ -3862,7 +3862,7 @@ class FootballCoachBot:
         # Payment receipt input - expecting photo, not text
         if user_context.get('awaiting_payment_receipt'):
             # UNIFIED INPUT TYPE VALIDATION for payment receipt
-            from input_validator import input_validator
+            from utils.input_validator import input_validator
             
             await input_validator.validate_and_reject_wrong_input_type(
                 update, 'photo', "ارسال رسید پرداخت", is_admin=False
@@ -3872,7 +3872,7 @@ class FootballCoachBot:
         # Coupon input
         if user_context.get('waiting_for_coupon'):
             # UNIFIED INPUT TYPE VALIDATION for coupon input
-            from input_validator import input_validator
+            from utils.input_validator import input_validator
             
             is_valid = await input_validator.validate_and_reject_wrong_input_type(
                 update, 'coupon_code', "ورود کد تخفیف", is_admin=False
@@ -3915,7 +3915,7 @@ class FootballCoachBot:
             return
         
         # UNIFIED INPUT TYPE VALIDATION - Check if text is appropriate for this question type
-        from input_validator import input_validator
+        from utils.input_validator import input_validator
         question_type = current_question.get('type', 'text')
         
         # Pre-validate input type before content validation

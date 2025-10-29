@@ -1,10 +1,10 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from admin_manager import AdminManager
-from data_manager import DataManager
-from coupon_manager import CouponManager
-from config import Config
-from admin_error_handler import admin_error_handler
+from admin.admin_manager import AdminManager
+from managers.data_manager import DataManager
+from managers.coupon_manager import CouponManager
+from bot.config import Config
+from admin.admin_error_handler import admin_error_handler
 from admin_debugger import admin_debugger
 import json
 import csv
@@ -509,7 +509,7 @@ class AdminPanel:
             await query.edit_message_text("❌ شما دسترسی مدیریت ادمین‌ها را ندارید.")
             return
         
-        from config import Config
+        from bot.config import Config
         is_super = await self.admin_manager.is_super_admin(user_id)
         env_admin_ids = Config.get_admin_ids() or []
         
@@ -742,7 +742,7 @@ class AdminPanel:
     async def back_to_admin_main(self, query, user_id: int) -> None:
         """Return to unified admin command hub"""
         # Clear admin-specific input states when navigating back to main admin
-        from admin_error_handler import admin_error_handler
+        from admin.admin_error_handler import admin_error_handler
         await admin_error_handler.clear_admin_input_states(self, user_id, "back_to_admin_main")
         
         await self.show_unified_admin_panel(query, user_id)
@@ -926,7 +926,7 @@ class AdminPanel:
             return
         
         try:
-            from config import Config
+            from bot.config import Config
             
             if Config.USE_DATABASE:
                 # Database mode cleanup
@@ -2822,7 +2822,7 @@ class AdminPanel:
             print(f"🔧 PLAN SAVE DEBUG - Course: {course_type}, Plans count: {len(plans)}, File: {plans_file}")
             
             # Log save attempt with detailed info
-            from admin_error_handler import admin_error_handler
+            from admin.admin_error_handler import admin_error_handler
             await admin_error_handler.log_plan_management_debug(
                 admin_id=0,  # System operation
                 operation='save_plans',
@@ -2883,7 +2883,7 @@ class AdminPanel:
             print(f"❌ ERROR DETAILS: {str(e)}")
             
             # Log save failure
-            from admin_error_handler import admin_error_handler
+            from admin.admin_error_handler import admin_error_handler
             await admin_error_handler.log_plan_management_debug(
                 admin_id=0,
                 operation='save_plans_failed',
@@ -3177,7 +3177,7 @@ class AdminPanel:
                     caption = f"📋 {plan_title}\n\n💪 برنامه تمرینی شما آماده است!\n📄 فایل: {plan_filename}\n🕐 ارسال شده در: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
                     
                     # Try to send from local file first
-                    from plan_file_manager import plan_file_manager
+                    from managers.plan_file_manager import plan_file_manager
                     sent_successfully = False
                     
                     if plan_local_path and plan_file_manager.file_exists(plan_local_path):
