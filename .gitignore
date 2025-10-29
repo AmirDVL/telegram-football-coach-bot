@@ -18,6 +18,31 @@ tokens.*
 private/
 
 # =================================================================
+# DEBUG, TEST, AND TEMPORARY FILES
+# =================================================================
+admin_debugger.py
+comprehensive_race_condition_fix.py
+database_reset.py
+deploy_permanent_fix.py
+force_admin_sync.py
+fresh_test_reset.py
+manual_admin_sync.py
+migrate_plans_to_local_storage.py
+permanent_corruption_fix.py
+production_reset.py
+restore_admin.py
+update_refs.py
+test_reset.ps1
+.gitignore_new
+
+# =================================================================
+# DUPLICATE/OLD DOCUMENTATION
+# =================================================================
+LOCAL_FILE_STORAGE_IMPLEMENTATION.md
+PROJECT_CLEANUP_COMPLETE.md
+FILE_STORAGE_DOCUMENTATION.md
+
+# =================================================================
 # RUNTIME DATA & USER FILES - EXCLUDE FROM VERSION CONTROL
 # =================================================================
 bot_data.json
